@@ -270,35 +270,6 @@ class AetherEvo:
                 logger.error(f"Error in status loop: {str(e)}")
                 await asyncio.sleep(60)
     
-    async def run(self):
-        """Run the Aether-Evo engine"""
-        logger.info("=" * 60)
-        logger.info("🌟 AETHER-EVO: SELF-EVOLVING WEEX ENGINE 🌟")
-        logger.info("=" * 60)
-        
-        # Initialize
-        initialized = await self.initialize()
-        if not initialized:
-            logger.error("Initialization failed. Exiting.")
-            return
-        
-        self.running = True
-        
-        try:
-            # Start all loops concurrently
-            await asyncio.gather(
-                self.reasoning.run_loop(self.symbol),
-                self.evolution_check_loop(),
-                self.trading_loop(),
-                self.status_loop(),
-            )
-        except KeyboardInterrupt:
-            logger.info("\n👋 Shutdown requested by user...")
-        except Exception as e:
-            logger.error(f"Fatal error: {str(e)}")
-        finally:
-            await self.shutdown()
-    
     async def shutdown(self):
         """Gracefully shutdown the system"""
         logger.info("Shutting down Aether-Evo...")
@@ -364,6 +335,9 @@ class AetherEvo:
             logger.error(f"Fatal error: {str(e)}")
         finally:
             await self.shutdown()
+
+
+async def main():
     """Main entry point"""
     try:
         # Load configuration

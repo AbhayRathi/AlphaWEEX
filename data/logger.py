@@ -161,6 +161,9 @@ Final Decision: {analysis.get('signal', 'HOLD')}
         """
         prompt = f"Generate novel trading hypothesis for {hypothesis.get('regime', 'UNKNOWN')} regime"
         
+        # Move join operations outside f-string to avoid backslash in expression
+        implementation_hints = '\n'.join('- ' + hint for hint in hypothesis.get('implementation_hints', []))
+        
         response = f"""
 <thought>
 Exploring creative trading strategies for {hypothesis.get('regime', 'UNKNOWN')} market conditions.
@@ -176,7 +179,7 @@ This hypothesis leverages:
 - {', '.join(hypothesis.get('suggested_indicators', []))}
 
 Implementation approach:
-{'\n'.join('- ' + hint for hint in hypothesis.get('implementation_hints', []))}
+{implementation_hints}
 </thought>
 """
         
