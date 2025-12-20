@@ -14,6 +14,9 @@ from reasoning_loop import ReasoningLoop
 from architect import Architect
 from guardrails import Guardrails
 from data.memory import EvolutionMemory
+from data.logger import ReasoningLogger
+from agents.explorer import StochasticAlphaExplorer
+from core.backtester import VectorizedBacktester
 import active_logic
 
 logging.basicConfig(
@@ -32,6 +35,9 @@ class AetherEvo:
     2. Reasoning Loop - R1 analyzes OHLCV every 15m
     3. Evolution System - Architect rewrites active_logic.py with R1 approval
     4. Guardrails - Safety mechanisms (12h lock, 3% kill-switch, code audit)
+    5. Stochastic Alpha Explorer - Generates novel hypotheses every 6h (Phase 3)
+    6. Vectorized Backtester - Validates strategies before deployment (Phase 3)
+    7. Reasoning Logger - Logs R1 traces for dashboard (Phase 3)
     """
     
     def __init__(self, config: AetherConfig):
@@ -73,6 +79,21 @@ class AetherEvo:
             logic_file_path="active_logic.py",
             evolution_memory=self.evolution_memory
         )
+        
+        # Phase 3 Components
+        # Reasoning Logger - Telemetry for R1 traces
+        self.reasoning_logger = ReasoningLogger()
+        
+        # Stochastic Alpha Explorer - 6-hour creative hypothesis generation
+        self.explorer = StochasticAlphaExplorer(
+            deepseek_config=config.deepseek,
+            evolution_memory=self.evolution_memory,
+            interval_hours=6,
+            temperature=1.3
+        )
+        
+        # Vectorized Backtester - Strategy validation
+        self.backtester = VectorizedBacktester()
         
         self.running = False
         self.symbol = config.trading.symbol
@@ -130,6 +151,24 @@ class AetherEvo:
                 if analysis.get('evolution_suggestion'):
                     logger.info("Evolution suggested by R1, checking guardrails...")
                     
+                    # Phase 3: Check if we have a hypothesis from explorer
+                    hypothesis = self.explorer.get_latest_hypothesis()
+                    if hypothesis:
+                        logger.info(f"🔬 Latest Hypothesis: {hypothesis.get('hypothesis')}")
+                        # Log hypothesis
+                        self.reasoning_logger.log_hypothesis(hypothesis, source="explorer")
+                    
+                    # Phase 3: Run backtest before evolution
+                    logger.info("🔬 Running backtest validation...")
+                    can_deploy, reason = self.backtester.validate_for_deployment("active_logic.py")
+                    
+                    if not can_deploy:
+                        logger.warning(f"⚠️ Backtest validation failed: {reason}")
+                        logger.info("Evolution blocked due to backtest failure")
+                        continue
+                    
+                    logger.info(f"✅ Backtest validation passed: {reason}")
+                    
                     # Attempt evolution
                     evolved = await self.architect.evolve(analysis)
                     
@@ -161,6 +200,9 @@ class AetherEvo:
                 if not analysis:
                     await asyncio.sleep(30)
                     continue
+                
+                # Phase 3: Log reasoning trace
+                self.reasoning_logger.log_analysis(analysis, source="reasoning_loop")
                 
                 # Fetch current OHLCV
                 ohlcv = await self.discovery.fetch_ohlcv(self.symbol, '15m', 100)
@@ -262,10 +304,66 @@ class AetherEvo:
         logger.info("Shutting down Aether-Evo...")
         self.running = False
         self.reasoning.stop()
+        self.explorer.stop()  # Phase 3: Stop explorer
         logger.info("✅ Shutdown complete")
-
-
-async def main():
+    
+    async def get_current_regime(self):
+        """
+        Get current market regime for explorer
+        Phase 3 helper method
+        """
+        try:
+            analysis = self.reasoning.get_latest_analysis()
+            if analysis:
+                return analysis.get('regime', 'UNKNOWN')
+            return 'UNKNOWN'
+        except:
+            return 'UNKNOWN'
+    
+    async def explorer_loop(self):
+        """
+        Run the Stochastic Alpha Explorer loop
+        Phase 3: Generates novel hypotheses every 6 hours
+        """
+        logger.info("🔍 Starting Stochastic Alpha Explorer loop...")
+        
+        # Create callback for getting current regime
+        async def regime_callback():
+            return await self.get_current_regime()
+        
+        # Run the explorer loop
+        await self.explorer.run_loop(regime_callback)
+    
+    async def run(self):
+        """Run the Aether-Evo engine"""
+        logger.info("=" * 60)
+        logger.info("🌟 AETHER-EVO: SELF-EVOLVING WEEX ENGINE 🌟")
+        logger.info("Phase 3: Alpha Factory & Reasoning Visualizer")
+        logger.info("=" * 60)
+        
+        # Initialize
+        initialized = await self.initialize()
+        if not initialized:
+            logger.error("Initialization failed. Exiting.")
+            return
+        
+        self.running = True
+        
+        try:
+            # Start all loops concurrently (including new Phase 3 explorer)
+            await asyncio.gather(
+                self.reasoning.run_loop(self.symbol),
+                self.evolution_check_loop(),
+                self.trading_loop(),
+                self.status_loop(),
+                self.explorer_loop(),  # Phase 3: Explorer agent
+            )
+        except KeyboardInterrupt:
+            logger.info("\n👋 Shutdown requested by user...")
+        except Exception as e:
+            logger.error(f"Fatal error: {str(e)}")
+        finally:
+            await self.shutdown()
     """Main entry point"""
     try:
         # Load configuration
