@@ -29,6 +29,18 @@ Aether-Evo consists of four core components:
 - **Syntax Audit**: Validates Python syntax before code deployment
 - **Logic Audit**: Ensures required functions exist and are callable
 
+## ⚠️ WEEX Exchange Support
+
+**Important**: WEEX is not yet included in the standard CCXT library. The current implementation uses Binance as a fallback for demonstration purposes.
+
+To use with actual WEEX exchange:
+
+1. **Option 1**: Wait for CCXT to add WEEX support
+2. **Option 2**: Implement a custom WEEX API client
+3. **Option 3**: Use WEEX's official API directly and adapt the Discovery Agent
+
+For now, the system works with any CCXT-supported exchange (100+ exchanges available).
+
 ## 📋 Requirements
 
 ```txt
@@ -75,6 +87,21 @@ REASONING_INTERVAL_MINUTES=15
 ```bash
 python main.py
 ```
+
+### 4. Run Demo (No Network Required)
+To see a complete demonstration without needing real API credentials or network access:
+```bash
+python demo.py
+```
+
+This will demonstrate all features including:
+- Configuration loading
+- Discovery Agent
+- R1 Reasoning Loop
+- Trading signal generation
+- Evolution system (with actual code rewriting!)
+- Guardrails (kill-switch and stability lock)
+- Code validation
 
 ## 📁 Project Structure
 

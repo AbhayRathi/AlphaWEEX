@@ -13,6 +13,7 @@ class WeexConfig(BaseModel):
     api_key: str = Field(default_factory=lambda: os.getenv("WEEX_API_KEY", ""))
     api_secret: str = Field(default_factory=lambda: os.getenv("WEEX_API_SECRET", ""))
     api_password: str = Field(default_factory=lambda: os.getenv("WEEX_API_PASSWORD", ""))
+    exchange_id: str = Field(default_factory=lambda: os.getenv("EXCHANGE_ID", "binance"))
 
 
 class DeepSeekConfig(BaseModel):

@@ -44,7 +44,8 @@ class AetherEvo:
         self.discovery = DiscoveryAgent(
             api_key=config.weex.api_key,
             api_secret=config.weex.api_secret,
-            api_password=config.weex.api_password
+            api_password=config.weex.api_password,
+            exchange_id=config.weex.exchange_id
         )
         
         # Guardrails

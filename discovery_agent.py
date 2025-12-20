@@ -16,14 +16,43 @@ class DiscoveryAgent:
     Discovers available trading pairs, timeframes, and features
     """
     
-    def __init__(self, api_key: str, api_secret: str, api_password: str):
-        """Initialize Discovery Agent with WEEX credentials"""
-        self.exchange = ccxt.weex({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'password': api_password,
-            'enableRateLimit': True,
-        })
+    def __init__(self, api_key: str, api_secret: str, api_password: str, exchange_id: str = 'binance'):
+        """
+        Initialize Discovery Agent with exchange credentials
+        
+        Note: WEEX is not yet in standard CCXT library. 
+        For demo purposes, we use Binance as fallback.
+        To use WEEX, you would need to:
+        1. Add WEEX support to CCXT, or
+        2. Use WEEX's custom API client
+        """
+        try:
+            # Try to use specified exchange (weex or fallback)
+            exchange_class = getattr(ccxt, exchange_id.lower(), None)
+            if exchange_class is None:
+                logger.warning(f"Exchange '{exchange_id}' not found in CCXT, using 'binance' as fallback")
+                exchange_class = ccxt.binance
+            
+            self.exchange = exchange_class({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'password': api_password,
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot',
+                }
+            })
+        except Exception as e:
+            logger.warning(f"Failed to initialize exchange with credentials: {str(e)}")
+            logger.info("Initializing in demo mode without credentials")
+            # Initialize without credentials for demo mode
+            self.exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot',
+                }
+            })
+        
         self.capabilities: Dict[str, Any] = {}
         
     async def discover_capabilities(self) -> Dict[str, Any]:
