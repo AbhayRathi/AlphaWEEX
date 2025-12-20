@@ -173,10 +173,13 @@ class WEEXClient:
         size_increment = market_info['size_increment']
         
         # Adjust price to tick_size precision
+        # Note: Using ROUND_DOWN to ensure we never exceed available funds
+        # This results in slightly smaller orders but prevents rejection
         price_decimal = Decimal(str(price))
         adjusted_price = (price_decimal / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
         
         # Adjust size to size_increment precision
+        # Note: Using ROUND_DOWN to ensure we never exceed available funds
         size_decimal = Decimal(str(size))
         adjusted_size = (size_decimal / size_increment).quantize(Decimal('1'), rounding=ROUND_DOWN) * size_increment
         

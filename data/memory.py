@@ -197,9 +197,15 @@ class EvolutionMemory:
             
         Returns:
             True if they match (within tolerance)
+        
+        Note: Currently uses exact match. For production, consider implementing
+        fuzzy matching or similarity thresholds to catch variations like:
+        - rsi_period: 14 vs 15 (close values)
+        - Similar parameter combinations
+        This can be extended with parameter distance metrics if needed.
         """
         # Simple exact match for now
-        # In production, you might want fuzzy matching or key parameter comparison
+        # TODO: Implement fuzzy matching for similar parameters
         return blacklisted == proposed
     
     def get_recent_evolutions(self, count: int = 5) -> List[Dict[str, Any]]:

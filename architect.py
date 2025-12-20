@@ -11,6 +11,10 @@ from data.memory import EvolutionMemory
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+CONFIDENCE_BOOST = 0.1  # Boost when R1 signal matches our signal
+R1_OVERRIDE_THRESHOLD = 0.7  # Confidence threshold for R1 to override
+
 
 class Architect:
     """
@@ -235,10 +239,10 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
         r1_signal = analysis['signal']
         r1_confidence = analysis.get('confidence', 0.5)
         
-        # Weight R1 analysis
+        # Weight R1 analysis using configured constants
         if r1_signal == action:
-            confidence = min((confidence + r1_confidence) / 2 + 0.1, 1.0)
-        elif r1_signal != 'HOLD' and r1_confidence > 0.7:
+            confidence = min((confidence + r1_confidence) / 2 + CONFIDENCE_BOOST, 1.0)
+        elif r1_signal != 'HOLD' and r1_confidence > R1_OVERRIDE_THRESHOLD:
             action = r1_signal
             confidence = r1_confidence
             reason = f"R1 override in {{regime}}: {{analysis.get('reasoning', 'No reason')}}"

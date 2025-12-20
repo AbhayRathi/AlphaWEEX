@@ -189,6 +189,7 @@ Consider:
         # Suggest evolution if confidence is low or regime suggests need for adaptation
         if confidence < 0.6:
             evolution_suggestion = {
+                # Note: .2% format multiplies by 100 and adds % (e.g., 0.6 -> 60.00%)
                 'reason': f'Low confidence ({confidence:.2%}) in {regime} regime',
                 'suggestion': f'Adapt strategy for {regime} market conditions. Consider regime-specific indicators and rules.'
             }

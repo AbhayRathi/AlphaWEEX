@@ -47,7 +47,7 @@ def calculate_atr(ohlcv_df: pd.DataFrame, period: int = 14) -> pd.Series:
     return atr
 
 
-def calculate_adx(ohlcv_df: pd.DataFrame, period: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
+def calculate_adx(ohlcv_df: pd.DataFrame, period: int = 14) -> tuple:
     """
     Calculate Average Directional Index (ADX) - Trend strength indicator
     
@@ -57,6 +57,8 @@ def calculate_adx(ohlcv_df: pd.DataFrame, period: int = 14) -> tuple[pd.Series, 
         
     Returns:
         Tuple of (ADX, +DI, -DI) Series
+    
+    Note: Using tuple instead of tuple[...] for Python 3.8+ compatibility
     """
     high = ohlcv_df['high']
     low = ohlcv_df['low']
