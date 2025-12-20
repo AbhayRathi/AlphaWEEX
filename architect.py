@@ -6,9 +6,14 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
 import os
+from data.memory import EvolutionMemory
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configuration constants
+CONFIDENCE_BOOST = 0.1  # Boost when R1 signal matches our signal
+R1_OVERRIDE_THRESHOLD = 0.7  # Confidence threshold for R1 to override
 
 
 class Architect:
@@ -17,11 +22,12 @@ class Architect:
     Only evolves if guardrails approve and R1 suggests improvements
     """
     
-    def __init__(self, guardrails, logic_file_path: str = "active_logic.py"):
+    def __init__(self, guardrails, logic_file_path: str = "active_logic.py", evolution_memory: Optional[EvolutionMemory] = None):
         """Initialize Architect"""
         self.guardrails = guardrails
         self.logic_file_path = logic_file_path
         self.evolution_history: list = []
+        self.evolution_memory = evolution_memory or EvolutionMemory()
         
     async def propose_evolution(self, analysis: Dict[str, Any]) -> Optional[str]:
         """
@@ -41,6 +47,19 @@ class Architect:
         logger.info(f"R1 Evolution Suggestion: {suggestion.get('reason')}")
         logger.info(f"Suggested changes: {suggestion.get('suggestion')}")
         
+        # Extract parameters from suggestion (simplified)
+        parameters = {
+            'reason': suggestion.get('reason'),
+            'suggestion': suggestion.get('suggestion'),
+            'regime': analysis.get('regime', 'UNKNOWN')
+        }
+        
+        # Check if parameters are blacklisted
+        is_blacklisted, blacklist_reason = self.evolution_memory.is_blacklisted(parameters)
+        if is_blacklisted:
+            logger.warning(f"⚠️  Evolution blocked - parameters are blacklisted: {blacklist_reason}")
+            return None
+        
         # Read current logic
         try:
             with open(self.logic_file_path, 'r') as f:
@@ -50,20 +69,23 @@ class Architect:
             return None
         
         # Generate evolved code (simplified - in production, use DeepSeek R1)
-        evolved_code = self._generate_evolved_code(current_code, suggestion)
+        evolved_code = self._generate_evolved_code(current_code, suggestion, analysis)
         
         return evolved_code
     
-    def _generate_evolved_code(self, current_code: str, suggestion: Dict[str, Any]) -> str:
+    def _generate_evolved_code(self, current_code: str, suggestion: Dict[str, Any], analysis: Dict[str, Any]) -> str:
         """
-        Generate evolved code based on suggestions
+        Generate evolved code based on suggestions and regime
         This is a simplified version - in production, use DeepSeek R1/V3
         """
-        # Example evolution: Add RSI indicator
-        evolved_code = '''"""
+        regime = analysis.get('regime', 'UNKNOWN')
+        
+        # Example evolution: Add regime-aware RSI indicator
+        evolved_code = f'''"""
 Active Logic - Self-evolving trading logic
 This file is automatically rewritten by the Architect
-Last evolved: ''' + datetime.now().isoformat() + '''
+Last evolved: {datetime.now().isoformat()}
+Regime at evolution: {regime}
 """
 from typing import Dict, List, Any
 
@@ -107,7 +129,7 @@ def calculate_indicators(ohlcv_data: List[List]) -> Dict[str, Any]:
         Dictionary of calculated indicators
     """
     if len(ohlcv_data) < 2:
-        return {}
+        return {{}}
     
     closes = [candle[4] for candle in ohlcv_data]
     volumes = [candle[5] for candle in ohlcv_data]
@@ -116,25 +138,26 @@ def calculate_indicators(ohlcv_data: List[List]) -> Dict[str, Any]:
     sma_5 = sum(closes[-5:]) / min(5, len(closes)) if closes else 0
     sma_20 = sum(closes[-20:]) / min(20, len(closes)) if len(closes) >= 20 else sum(closes) / len(closes)
     
-    # RSI - NEW INDICATOR
+    # RSI - REGIME-AWARE INDICATOR
     rsi = calculate_rsi(closes)
     
     # Volume metrics
     avg_volume = sum(volumes) / len(volumes) if volumes else 0
     
-    return {
+    return {{
         'sma_5': sma_5,
         'sma_20': sma_20,
         'rsi': rsi,
         'current_price': closes[-1],
         'avg_volume': avg_volume,
         'current_volume': volumes[-1]
-    }
+    }}
 
 
 def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generate trading signal based on indicators and R1 analysis
+    REGIME-AWARE: Adapts strategy based on detected market regime
     
     Args:
         indicators: Calculated indicators
@@ -144,60 +167,92 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
         Trading signal with action and parameters
     """
     if not indicators:
-        return {
+        return {{
             'action': 'HOLD',
             'confidence': 0.0,
             'reason': 'Insufficient indicators'
-        }
+        }}
     
     action = 'HOLD'
     confidence = 0.5
     reason = 'Default hold position'
     
-    # Trading logic with RSI enhancement
+    # Get regime from analysis
+    regime = analysis.get('regime', 'UNKNOWN')
+    
+    # Trading logic with REGIME-AWARENESS and RSI enhancement
     current_price = indicators.get('current_price', 0)
     sma_5 = indicators.get('sma_5', 0)
     sma_20 = indicators.get('sma_20', 0)
     rsi = indicators.get('rsi', 50)
     
-    # Enhanced strategy with RSI
-    if sma_5 > sma_20 and current_price > sma_5:
-        if rsi < 70:  # Not overbought
+    # Regime-specific strategy adaptation
+    if regime == 'TRENDING_UP':
+        # In uptrend, be more aggressive on buys
+        if sma_5 > sma_20 and current_price > sma_5:
+            if rsi < 70:  # Not overbought
+                action = 'BUY'
+                confidence = 0.75
+                reason = f'Uptrend regime: Strong buy signal (RSI: {{rsi:.1f}})'
+            else:
+                action = 'HOLD'
+                confidence = 0.55
+                reason = 'Uptrend but RSI overbought - waiting'
+    elif regime == 'TRENDING_DOWN':
+        # In downtrend, be more aggressive on sells
+        if sma_5 < sma_20 and current_price < sma_5:
+            if rsi > 30:  # Not oversold
+                action = 'SELL'
+                confidence = 0.75
+                reason = f'Downtrend regime: Strong sell signal (RSI: {{rsi:.1f}})'
+            else:
+                action = 'HOLD'
+                confidence = 0.55
+                reason = 'Downtrend but RSI oversold - potential reversal'
+    elif regime == 'RANGE_VOLATILE':
+        # In volatile range, use mean reversion with tighter thresholds
+        if rsi < 35:
             action = 'BUY'
-            confidence = 0.70
-            reason = 'Uptrend with RSI confirmation (not overbought)'
-        elif rsi >= 70:
-            action = 'HOLD'
-            confidence = 0.55
-            reason = 'Uptrend but RSI overbought - waiting'
-    elif sma_5 < sma_20 and current_price < sma_5:
-        if rsi > 30:  # Not oversold
+            confidence = 0.65
+            reason = f'Range-volatile: Oversold mean reversion (RSI: {{rsi:.1f}})'
+        elif rsi > 65:
             action = 'SELL'
-            confidence = 0.70
-            reason = 'Downtrend with RSI confirmation (not oversold)'
-        elif rsi <= 30:
-            action = 'HOLD'
-            confidence = 0.55
-            reason = 'Downtrend but RSI oversold - potential reversal'
+            confidence = 0.65
+            reason = f'Range-volatile: Overbought mean reversion (RSI: {{rsi:.1f}})'
+        else:
+            reason = 'Range-volatile: Waiting for extreme'
+    elif regime == 'RANGE_QUIET':
+        # In quiet range, wait for breakout confirmation
+        if sma_5 > sma_20 and current_price > sma_5 and rsi > 55:
+            action = 'BUY'
+            confidence = 0.60
+            reason = f'Range-quiet: Potential breakout up (RSI: {{rsi:.1f}})'
+        elif sma_5 < sma_20 and current_price < sma_5 and rsi < 45:
+            action = 'SELL'
+            confidence = 0.60
+            reason = f'Range-quiet: Potential breakout down (RSI: {{rsi:.1f}})'
+        else:
+            reason = 'Range-quiet: Waiting for breakout'
     
-    # Consider R1 analysis
+    # Consider R1 analysis for final decision
     if analysis and analysis.get('signal'):
         r1_signal = analysis['signal']
         r1_confidence = analysis.get('confidence', 0.5)
         
-        # Weight R1 analysis
+        # Weight R1 analysis using configured constants
         if r1_signal == action:
-            confidence = (confidence + r1_confidence) / 2 + 0.1
-        elif r1_signal != 'HOLD' and r1_confidence > 0.7:
+            confidence = min((confidence + r1_confidence) / 2 + CONFIDENCE_BOOST, 1.0)
+        elif r1_signal != 'HOLD' and r1_confidence > R1_OVERRIDE_THRESHOLD:
             action = r1_signal
             confidence = r1_confidence
-            reason = f"R1 override: {analysis.get('reasoning', 'No reason')}"
+            reason = f"R1 override in {{regime}}: {{analysis.get('reasoning', 'No reason')}}"
     
-    return {
+    return {{
         'action': action,
         'confidence': min(confidence, 1.0),
-        'reason': reason
-    }
+        'reason': reason,
+        'regime': regime
+    }}
 '''
         return evolved_code
     
@@ -244,7 +299,21 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
             # Mark evolution in guardrails
             self.guardrails.mark_evolution()
             
-            # Record evolution
+            # Record evolution in memory
+            suggestion = analysis['evolution_suggestion']
+            parameters = {
+                'reason': suggestion.get('reason'),
+                'suggestion': suggestion.get('suggestion'),
+                'regime': analysis.get('regime', 'UNKNOWN')
+            }
+            self.evolution_memory.record_evolution(
+                parameters=parameters,
+                reason=suggestion['reason'],
+                suggestion=suggestion['suggestion'],
+                initial_equity=self.guardrails.current_equity
+            )
+            
+            # Record evolution in local history
             self.evolution_history.append({
                 'timestamp': datetime.now().isoformat(),
                 'reason': analysis['evolution_suggestion']['reason'],

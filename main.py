@@ -13,6 +13,7 @@ from discovery_agent import DiscoveryAgent
 from reasoning_loop import ReasoningLoop
 from architect import Architect
 from guardrails import Guardrails
+from data.memory import EvolutionMemory
 import active_logic
 
 logging.basicConfig(
@@ -55,17 +56,22 @@ class AetherEvo:
             stability_lock_hours=config.trading.stability_lock_hours
         )
         
+        # Evolution Memory
+        self.evolution_memory = EvolutionMemory()
+        
         # Reasoning Loop
         self.reasoning = ReasoningLoop(
             discovery_agent=self.discovery,
             deepseek_config=config.deepseek,
-            interval_minutes=config.trading.reasoning_interval_minutes
+            interval_minutes=config.trading.reasoning_interval_minutes,
+            evolution_memory=self.evolution_memory
         )
         
         # Architect
         self.architect = Architect(
             guardrails=self.guardrails,
-            logic_file_path="active_logic.py"
+            logic_file_path="active_logic.py",
+            evolution_memory=self.evolution_memory
         )
         
         self.running = False
