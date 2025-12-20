@@ -176,7 +176,7 @@ This hypothesis leverages:
 - {', '.join(hypothesis.get('suggested_indicators', []))}
 
 Implementation approach:
-{chr(10).join('- ' + hint for hint in hypothesis.get('implementation_hints', []))}
+{'\n'.join('- ' + hint for hint in hypothesis.get('implementation_hints', []))}
 </thought>
 """
         

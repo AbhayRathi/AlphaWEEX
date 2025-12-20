@@ -125,7 +125,7 @@ def test_dashboard_import():
     print("=" * 60)
     
     try:
-        from dashboard import app
+        from dashboard.app import main
         print("✅ Dashboard imports successfully")
         print("   Run with: streamlit run dashboard/app.py")
         print()

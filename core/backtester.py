@@ -353,12 +353,13 @@ class VectorizedBacktester:
         total_return = (final_equity - initial_capital) / initial_capital
         
         # Sharpe Ratio (annualized, assuming 15-minute data)
-        # 15-minute periods per year: 365 * 24 * 4 = 35,040
+        # Trading days per year: 252, periods per day: 24 * 4 = 96
+        # Annualization factor: sqrt(252 * 96) = sqrt(24192) ≈ 155.5
         returns_mean = equity_df['returns'].mean()
         returns_std = equity_df['returns'].std()
         
         if returns_std > 0:
-            sharpe_ratio = (returns_mean / returns_std) * np.sqrt(35040)
+            sharpe_ratio = (returns_mean / returns_std) * np.sqrt(24192)
         else:
             sharpe_ratio = 0.0
         
