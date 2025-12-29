@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import os
 from data.memory import EvolutionMemory
+from data.shared_state import get_shared_state, RiskLevel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 CONFIDENCE_BOOST = 0.1  # Boost when R1 signal matches our signal
 R1_OVERRIDE_THRESHOLD = 0.7  # Confidence threshold for R1 to override
+HIGH_RISK_REDUCTION = 0.5  # 50% reduction when global risk is HIGH
 
 
 class Architect:
@@ -28,6 +30,7 @@ class Architect:
         self.logic_file_path = logic_file_path
         self.evolution_history: list = []
         self.evolution_memory = evolution_memory or EvolutionMemory()
+        self.shared_state = get_shared_state()
         
     async def propose_evolution(self, analysis: Dict[str, Any]) -> Optional[str]:
         """
@@ -338,3 +341,41 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
     def get_evolution_history(self) -> list:
         """Get history of all evolutions"""
         return self.evolution_history
+    
+    def get_adjusted_size(self, base_size: float) -> float:
+        """
+        Calculate adjusted position size based on sentiment and global risk
+        
+        Formula: Final_Size = Base_Size × Sentiment_Multiplier
+        Safety Override: If global_risk_level == HIGH, force 50% reduction
+        
+        Args:
+            base_size: Base position size
+            
+        Returns:
+            Adjusted position size
+        """
+        # Get sentiment multiplier
+        sentiment_multiplier = self.shared_state.get_sentiment_multiplier()
+        
+        # Apply sentiment multiplier
+        adjusted_size = base_size * sentiment_multiplier
+        
+        # Get global risk level
+        global_risk = self.shared_state.get_global_risk_level()
+        
+        # Safety override: 50% reduction if HIGH risk
+        if global_risk == RiskLevel.HIGH:
+            adjusted_size *= HIGH_RISK_REDUCTION
+            logger.warning(
+                f"⚠️  HIGH RISK: Applying 50% reduction to position size "
+                f"(Base: {base_size:.2f} → Sentiment: {base_size * sentiment_multiplier:.2f} "
+                f"→ Final: {adjusted_size:.2f})"
+            )
+        else:
+            logger.info(
+                f"✅ Position sizing: Base: {base_size:.2f} × Sentiment: {sentiment_multiplier:.2f} "
+                f"= {adjusted_size:.2f}"
+            )
+        
+        return adjusted_size

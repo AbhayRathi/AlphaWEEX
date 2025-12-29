@@ -345,6 +345,182 @@ def render_live_metrics():
         st.error(f"Error loading metrics: {str(e)}")
 
 
+def render_global_context():
+    """Render the Global Context section (Phase 4)"""
+    st.header("🌍 Global Context")
+    st.markdown("*TradFi Oracle & Sentiment Analysis*")
+    
+    try:
+        # Import shared state
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from data.shared_state import get_shared_state
+        
+        shared_state = get_shared_state()
+        
+        # Display Global Risk Level
+        st.subheader("Global Risk Level")
+        
+        oracle_data = shared_state.get_oracle_data()
+        risk_level = oracle_data['risk_level']
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            risk_color = "🔴" if risk_level == "HIGH" else "🟢"
+            st.metric("Risk Level", f"{risk_color} {risk_level}")
+        
+        with col2:
+            last_update = oracle_data.get('last_update', 'N/A')
+            if last_update != 'N/A':
+                last_update = datetime.fromisoformat(last_update).strftime("%H:%M:%S")
+            st.metric("Last Oracle Update", last_update)
+        
+        with col3:
+            sentiment_data = shared_state.get_sentiment_data()
+            multiplier = sentiment_data['multiplier']
+            st.metric("Sentiment Multiplier", f"{multiplier:.2f}x")
+        
+        # Display TradFi Market Data
+        if oracle_data['data']:
+            st.markdown("---")
+            st.subheader("📊 TradFi Market Data")
+            
+            market_data = oracle_data['data']
+            
+            if 'spy' in market_data:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    spy_change = market_data['spy'].get('change_pct', 0)
+                    spy_price = market_data['spy'].get('price', 0)
+                    st.metric(
+                        "SPY (S&P 500 ETF)",
+                        f"${spy_price:.2f}",
+                        f"{spy_change:+.2f}%"
+                    )
+                
+                with col2:
+                    qqq_change = market_data['qqq'].get('change_pct', 0)
+                    qqq_price = market_data['qqq'].get('price', 0)
+                    st.metric(
+                        "QQQ (Nasdaq ETF)",
+                        f"${qqq_price:.2f}",
+                        f"{qqq_change:+.2f}%"
+                    )
+                
+                st.caption(f"Data source: {market_data.get('source', 'unknown')}")
+        
+        # Display Sentiment Analysis
+        st.markdown("---")
+        st.subheader("💭 Sentiment Analysis")
+        
+        sentiment_info = sentiment_data['data']
+        
+        if sentiment_info:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                sentiment = sentiment_info.get('sentiment', 'Unknown')
+                st.metric("Market Sentiment", sentiment)
+                
+                if 'fear_greed' in sentiment_info:
+                    fng = sentiment_info['fear_greed']
+                    fng_value = fng.get('value', 50)
+                    fng_class = fng.get('classification', 'Unknown')
+                    st.metric("Fear & Greed Index", f"{fng_value} - {fng_class}")
+            
+            with col2:
+                reasoning = sentiment_info.get('reasoning', 'No reasoning available')
+                st.markdown("**Reasoning:**")
+                st.info(reasoning)
+            
+            # Display recent headlines
+            if 'headlines' in sentiment_info:
+                st.markdown("**Recent Bitcoin Headlines:**")
+                for i, headline in enumerate(sentiment_info['headlines'][:5], 1):
+                    st.text(f"{i}. {headline}")
+        else:
+            st.info("No sentiment data available yet")
+        
+        # Display BTC vs SPY Comparison Chart
+        st.markdown("---")
+        st.subheader("📈 BTC vs SPY Correlation (24h)")
+        
+        # Generate sample data for demonstration
+        # In production, fetch real 24h data
+        import numpy as np
+        
+        hours = list(range(24))
+        
+        # Mock normalized price data (in production, fetch real data)
+        btc_normalized = 100 + np.cumsum(np.random.randn(24) * 2)
+        spy_normalized = 100 + np.cumsum(np.random.randn(24) * 0.5)
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=hours,
+            y=btc_normalized,
+            mode='lines',
+            name='BTC (normalized)',
+            line=dict(color='orange', width=2)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=hours,
+            y=spy_normalized,
+            mode='lines',
+            name='SPY (normalized)',
+            line=dict(color='blue', width=2)
+        ))
+        
+        fig.update_layout(
+            title="BTC vs SPY Price Correlation (Normalized to 100)",
+            xaxis_title="Hours Ago",
+            yaxis_title="Normalized Price",
+            height=400,
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.caption("Note: Chart uses sample data. In production, this would display real 24h normalized prices.")
+        
+        # Position Sizing Impact
+        st.markdown("---")
+        st.subheader("💰 Position Sizing Impact")
+        
+        base_size = 100.0  # Example base size
+        adjusted_size = base_size * multiplier
+        
+        if risk_level == "HIGH":
+            adjusted_size *= 0.5
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Base Position Size", f"${base_size:.2f}")
+        
+        with col2:
+            st.metric("After Sentiment", f"${base_size * multiplier:.2f}")
+        
+        with col3:
+            st.metric("Final Size", f"${adjusted_size:.2f}")
+        
+        reduction_pct = ((adjusted_size - base_size) / base_size) * 100
+        if reduction_pct < 0:
+            st.warning(f"⚠️  Position size reduced by {abs(reduction_pct):.1f}% due to market conditions")
+        elif reduction_pct > 0:
+            st.success(f"✅ Position size increased by {reduction_pct:.1f}% due to favorable conditions")
+        else:
+            st.info("ℹ️  Position size unchanged")
+        
+    except Exception as e:
+        st.error(f"Error loading global context: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def main():
     """Main dashboard application"""
     st.set_page_config(
@@ -354,14 +530,14 @@ def main():
     )
     
     st.title("🧠 AlphaWEEX Reasoning Dashboard")
-    st.markdown("*Phase 3: The Alpha Factory & Reasoning Visualizer*")
+    st.markdown("*Phase 4: Global Oracle, Sentiment & Automated Testing*")
     st.markdown("---")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select View",
-        ["Overview", "Thinking Log", "Strategy Lineage", "Live Metrics"]
+        ["Overview", "Thinking Log", "Strategy Lineage", "Live Metrics", "Global Context"]
     )
     
     if page == "Overview":
@@ -374,6 +550,7 @@ def main():
         - **Thinking Log**: View real-time reasoning traces from DeepSeek-R1
         - **Strategy Lineage**: Visualize how strategies evolved over time
         - **Live Metrics**: Monitor system performance and safety thresholds
+        - **Global Context**: TradFi Oracle, Sentiment Analysis, and Position Sizing (Phase 4)
         
         ### Quick Stats
         """)
@@ -407,9 +584,12 @@ def main():
     elif page == "Live Metrics":
         render_live_metrics()
     
+    elif page == "Global Context":
+        render_global_context()
+    
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**AlphaWEEX Phase 3**")
+    st.sidebar.markdown("**AlphaWEEX Phase 4**")
     st.sidebar.markdown("Built with Streamlit")
 
 
