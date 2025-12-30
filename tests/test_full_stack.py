@@ -140,6 +140,8 @@ class TestKillSwitchEdgeCase:
         """
         Test kill-switch activation on 5% rapid price drop
         """
+        from datetime import datetime, timedelta
+        
         print("\n🛑 Testing Kill-Switch Edge Case...")
         
         guardrails = Guardrails(
@@ -148,28 +150,38 @@ class TestKillSwitchEdgeCase:
             stability_lock_hours=12
         )
         
-        # Simulate 5% equity drop
-        current_equity = 950.0  # 5% drop from 1000
-        equity_change_pct = ((current_equity - guardrails.initial_equity) / guardrails.initial_equity)
+        # Add history entry from 59 minutes ago (within 1 hour window)
+        one_hour_ago = datetime.now() - timedelta(minutes=59)
+        guardrails.equity_history.append({
+            'timestamp': one_hour_ago,
+            'equity': 1000.0
+        })
         
-        print(f"   Initial Equity: ${guardrails.initial_equity}")
-        print(f"   Current Equity: ${current_equity}")
+        # Simulate 5% equity drop
+        guardrails.current_equity = 950.0  # 5% drop from 1000
+        equity_change_pct = ((guardrails.current_equity - 1000.0) / 1000.0)
+        
+        print(f"   Initial Equity (59m ago): $1000.0")
+        print(f"   Current Equity: ${guardrails.current_equity}")
         print(f"   Change: {equity_change_pct:.2%}")
         
-        # Check kill-switch
-        kill_switch_status = guardrails.check_kill_switch(current_equity)
+        # Check kill-switch (internal method)
+        guardrails._check_kill_switch()
+        kill_switch_active = guardrails.is_kill_switch_active()
         
         print(f"   Kill-Switch Threshold: {guardrails.kill_switch_threshold:.2%}")
-        print(f"   Kill-Switch Active: {kill_switch_status['kill_switch_active']}")
+        print(f"   Kill-Switch Active: {kill_switch_active}")
         
         # 5% drop should trigger kill-switch (threshold is 3%)
-        assert kill_switch_status['kill_switch_active'] is True
+        assert kill_switch_active is True
         assert abs(equity_change_pct) > guardrails.kill_switch_threshold
         
         print("   ✅ Kill-switch triggered correctly on 5% drop!")
     
     def test_kill_switch_2_percent_drop(self):
         """Test kill-switch does NOT activate on 2% drop (below threshold)"""
+        from datetime import datetime, timedelta
+        
         print("\n✅ Testing Kill-Switch Below Threshold...")
         
         guardrails = Guardrails(
@@ -178,17 +190,25 @@ class TestKillSwitchEdgeCase:
             stability_lock_hours=12
         )
         
+        # Add history entry from 59 minutes ago (within 1 hour window)
+        one_hour_ago = datetime.now() - timedelta(minutes=59)
+        guardrails.equity_history.append({
+            'timestamp': one_hour_ago,
+            'equity': 1000.0
+        })
+        
         # Simulate 2% equity drop (below threshold)
-        current_equity = 980.0  # 2% drop from 1000
+        guardrails.current_equity = 980.0  # 2% drop from 1000
         
         # Check kill-switch
-        kill_switch_status = guardrails.check_kill_switch(current_equity)
+        guardrails._check_kill_switch()
+        kill_switch_active = guardrails.is_kill_switch_active()
         
-        print(f"   Current Equity: ${current_equity} (2% drop)")
-        print(f"   Kill-Switch Active: {kill_switch_status['kill_switch_active']}")
+        print(f"   Current Equity: ${guardrails.current_equity} (2% drop)")
+        print(f"   Kill-Switch Active: {kill_switch_active}")
         
         # 2% drop should NOT trigger kill-switch (threshold is 3%)
-        assert kill_switch_status['kill_switch_active'] is False
+        assert kill_switch_active is False
         
         print("   ✅ Kill-switch correctly stayed inactive on 2% drop!")
 
@@ -207,7 +227,11 @@ class TestHighRiskScenario:
         oracle = TradFiOracle()
         sentiment_agent = SentimentAgent()
         narrative = NarrativePulse()
-        guardrails = Guardrails(initial_equity=1000.0)
+        guardrails = Guardrails(
+            initial_equity=1000.0,
+            kill_switch_threshold=0.03,
+            stability_lock_hours=12
+        )
         architect = Architect(guardrails)
         shared_state = get_shared_state()
         
@@ -257,21 +281,21 @@ class TestEvolutionSafety:
         
         guardrails = Guardrails(
             initial_equity=1000.0,
+            kill_switch_threshold=0.03,
             stability_lock_hours=12
         )
         
         # Record an evolution
-        guardrails.record_evolution()
+        guardrails.mark_evolution()
         
         # Check if evolution is allowed immediately after
-        can_evolve = guardrails.can_evolve()
+        can_evolve_result = guardrails.can_evolve()
         
         print(f"   Last Evolution: {guardrails.last_evolution_time}")
-        print(f"   Can Evolve Now: {can_evolve['allowed']}")
-        print(f"   Reason: {can_evolve.get('reason', 'N/A')}")
+        print(f"   Can Evolve Now: {can_evolve_result}")
         
         # Should not be allowed (stability lock active)
-        assert can_evolve['allowed'] is False
+        assert can_evolve_result is False
         
         print("   ✅ Stability lock prevents immediate re-evolution!")
 

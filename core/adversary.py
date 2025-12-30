@@ -93,7 +93,7 @@ class AdversarialAlpha:
             audit_report['tests_failed'].append('flash_crash_failure')
             logger.warning("❌ Strategy fails under flash crash simulation")
             audit_report['recommendations'].append(
-                f"Strategy shows {crash_details['drawdown']:.1%} drawdown in flash crash - "
+                f"Strategy shows {crash_details.get('estimated_drawdown', 0.20):.1%} drawdown in flash crash - "
                 f"exceeds {self.max_drawdown_threshold:.1%} threshold"
             )
         
