@@ -74,6 +74,33 @@ class Architect:
         # Generate evolved code (simplified - in production, use DeepSeek R1)
         evolved_code = self._generate_evolved_code(current_code, suggestion, analysis)
         
+        # Phase 5: Adversarial validation before deployment
+        try:
+            from core.adversary import AdversarialAlpha
+            
+            adversary = AdversarialAlpha(
+                flash_crash_pct=-0.20,
+                max_drawdown_threshold=0.15
+            )
+            
+            approved, audit_report = adversary.red_team_strategy(evolved_code)
+            
+            if not approved:
+                logger.error(
+                    f"❌ Adversary REJECTED strategy\n"
+                    f"   Failed tests: {audit_report.get('tests_failed', [])}\n"
+                    f"   Recommendations: {audit_report.get('recommendations', [])}"
+                )
+                return None  # Don't deploy rejected strategy
+            
+            logger.info(
+                f"✅ Adversary APPROVED strategy\n"
+                f"   Passed tests: {audit_report.get('tests_passed', [])}"
+            )
+        except Exception as e:
+            logger.error(f"Adversarial validation failed (non-critical): {e}")
+            # Continue with evolution even if adversary check fails
+        
         return evolved_code
     
     def _generate_evolved_code(self, current_code: str, suggestion: Dict[str, Any], analysis: Dict[str, Any]) -> str:
@@ -344,10 +371,9 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
     
     def get_adjusted_size(self, base_size: float) -> float:
         """
-        Calculate adjusted position size based on sentiment and global risk
+        Calculate adjusted position size with ALL risk factors
         
-        Formula: Final_Size = Base_Size × Sentiment_Multiplier
-        Safety Override: If global_risk_level == HIGH, force 50% reduction
+        Formula: Final_Size = Base × Sentiment × Risk_Level_Multiplier × Whale_Adjustment
         
         Args:
             base_size: Base position size
@@ -376,6 +402,14 @@ def generate_signal(indicators: Dict[str, Any], analysis: Dict[str, Any]) -> Dic
             logger.info(
                 f"✅ Position sizing: Base: {base_size:.2f} × Sentiment: {sentiment_multiplier:.2f} "
                 f"= {adjusted_size:.2f}"
+            )
+        
+        # NEW: Whale dump risk reduction
+        if self.shared_state.get_whale_dump_risk():
+            adjusted_size *= 0.7  # 30% reduction
+            logger.warning(
+                f"🐋 Whale risk active: Position reduced by 30% "
+                f"(Final size: {adjusted_size:.4f})"
             )
         
         return adjusted_size

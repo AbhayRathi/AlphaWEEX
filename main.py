@@ -19,6 +19,11 @@ from agents.explorer import StochasticAlphaExplorer
 from core.backtester import VectorizedBacktester
 import active_logic
 
+# Wild Imagination imports
+from agents.narrative import NarrativePulse
+from core.adversary import AdversarialAlpha
+from core.shadow_engine import ShadowEngine
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -94,6 +99,26 @@ class AetherEvo:
         
         # Vectorized Backtester - Strategy validation
         self.backtester = VectorizedBacktester()
+        
+        # Phase 5: Wild Imagination modules
+        from data.shared_state import get_shared_state
+        self.shared_state = get_shared_state()
+        
+        self.narrative = NarrativePulse(
+            whale_threshold_btc=1000.0
+        )
+        
+        self.adversary = AdversarialAlpha(
+            flash_crash_pct=-0.20,
+            max_drawdown_threshold=0.15
+        )
+        
+        self.shadow_engine = ShadowEngine(
+            promotion_threshold_iterations=100,
+            sharpe_ratio_threshold=1.2
+        )
+        
+        logger.info("✅ Wild Imagination modules initialized (Adversary, Shadow Engine, Narrative)")
         
         self.running = False
         self.symbol = config.trading.symbol
@@ -217,6 +242,25 @@ class AetherEvo:
                           f"(Confidence: {signal['confidence']:.2%}) "
                           f"- {signal['reason']}")
                 
+                # Phase 5: Shadow engine comparison
+                if signal['action'] in ['BUY', 'SELL']:
+                    current_price = indicators.get('current_price', ohlcv[-1][4] if ohlcv else 50000.0)
+                    
+                    try:
+                        shadow_result = self.shadow_engine.simulate_trade_pair(
+                            market_signal=signal['action'].lower(),
+                            market_price=current_price
+                        )
+                        
+                        if shadow_result.get('promotion_alert'):
+                            logger.warning(
+                                f"🚀 PROMOTION ALERT: Shadow strategy outperforming!\n"
+                                f"   Shadow Sharpe: {shadow_result['shadow_sharpe']:.2f}\n"
+                                f"   Live Sharpe: {shadow_result['live_sharpe']:.2f}"
+                            )
+                    except Exception as e:
+                        logger.error(f"Shadow engine error (non-critical): {e}")
+                
                 # In production, execute trades here based on signal
                 # For now, just log the signal
                 
@@ -305,6 +349,27 @@ class AetherEvo:
         # Run the explorer loop
         await self.explorer.run_loop(regime_callback)
     
+    async def narrative_loop(self):
+        """Monitor whale activity every 5 minutes"""
+        logger.info("🐋 Narrative monitoring started...")
+        
+        while self.running:
+            try:
+                # Mock whale inflow (replace with real exchange API data in production)
+                # TODO: Integrate with actual whale alert service or exchange API
+                mock_inflow_btc = 500.0
+                
+                result = self.narrative.check_whale_inflow(mock_inflow_btc)
+                
+                if result.get('is_whale_event'):
+                    logger.warning(f"🐋 ALERT: Whale event detected - {result['exchange_inflow_btc']:.2f} BTC")
+                
+                await asyncio.sleep(300)  # Check every 5 minutes
+                
+            except Exception as e:
+                logger.error(f"Error in narrative loop: {e}")
+                await asyncio.sleep(60)  # Retry after 1 minute on error
+    
     async def run(self):
         """Run the Aether-Evo engine"""
         logger.info("=" * 60)
@@ -321,13 +386,14 @@ class AetherEvo:
         self.running = True
         
         try:
-            # Start all loops concurrently (including new Phase 3 explorer)
+            # Start all loops concurrently (including Phase 3 explorer and Phase 5 narrative)
             await asyncio.gather(
                 self.reasoning.run_loop(self.symbol),
                 self.evolution_check_loop(),
                 self.trading_loop(),
                 self.status_loop(),
                 self.explorer_loop(),  # Phase 3: Explorer agent
+                self.narrative_loop(),  # Phase 5: Narrative monitoring
             )
         except KeyboardInterrupt:
             logger.info("\n👋 Shutdown requested by user...")

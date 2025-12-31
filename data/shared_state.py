@@ -33,6 +33,7 @@ class SharedState:
         self._lock = threading.Lock()
         self._global_risk_level = RiskLevel.NORMAL
         self._sentiment_multiplier = 1.0
+        self._whale_dump_risk = False
         self._last_oracle_update: Optional[datetime] = None
         self._last_sentiment_update: Optional[datetime] = None
         self._oracle_data: Dict[str, Any] = {}
@@ -125,6 +126,29 @@ class SharedState:
                 'data': self._sentiment_data.copy()
             }
     
+    def set_whale_dump_risk(self, risk_active: bool):
+        """
+        Set whale dump risk flag (thread-safe)
+        
+        Args:
+            risk_active: Whether whale dump risk is active
+        """
+        with self._lock:
+            old_risk = self._whale_dump_risk
+            self._whale_dump_risk = risk_active
+            if old_risk != risk_active:
+                logger.warning(f"🐋 Whale dump risk: {risk_active}")
+    
+    def get_whale_dump_risk(self) -> bool:
+        """
+        Get whale dump risk flag (thread-safe)
+        
+        Returns:
+            Current whale dump risk status
+        """
+        with self._lock:
+            return self._whale_dump_risk
+    
     def get_all_state(self) -> Dict[str, Any]:
         """
         Get complete state snapshot (thread-safe)
@@ -136,6 +160,7 @@ class SharedState:
             return {
                 'global_risk_level': self._global_risk_level,
                 'sentiment_multiplier': self._sentiment_multiplier,
+                'whale_dump_risk': self._whale_dump_risk,
                 'last_oracle_update': self._last_oracle_update.isoformat() if self._last_oracle_update else None,
                 'last_sentiment_update': self._last_sentiment_update.isoformat() if self._last_sentiment_update else None,
                 'oracle_data': self._oracle_data.copy(),
