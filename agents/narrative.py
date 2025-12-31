@@ -71,8 +71,9 @@ class NarrativePulse:
                 f"(threshold: {self.whale_threshold_btc} BTC)"
             )
             
-            # Set whale dump risk flag
+            # Set whale dump risk flag in SharedState
             self._whale_dump_risk = True
+            self.shared_state.set_whale_dump_risk(True)
             
             # Record whale event
             whale_event = {
@@ -98,6 +99,7 @@ class NarrativePulse:
             if self._whale_dump_risk:
                 # For simplicity, clear flag if consecutive normal readings
                 self._whale_dump_risk = False
+                self.shared_state.set_whale_dump_risk(False)
                 self._update_shared_state_whale_risk(False, None)
         
         result = {
