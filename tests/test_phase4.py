@@ -281,6 +281,7 @@ class TestPositionSizing:
         state = get_shared_state()
         state.set_global_risk_level(RiskLevel.NORMAL)
         state.set_sentiment_multiplier(1.0)
+        state.set_whale_dump_risk(False)  # Ensure whale risk is off
         
         # Test
         base_size = 100.0
@@ -306,6 +307,7 @@ class TestPositionSizing:
         state = get_shared_state()
         state.set_global_risk_level(RiskLevel.NORMAL)
         state.set_sentiment_multiplier(0.8)  # Cautious sentiment
+        state.set_whale_dump_risk(False)  # Ensure whale risk is off
         
         # Test
         base_size = 100.0
@@ -331,6 +333,7 @@ class TestPositionSizing:
         state = get_shared_state()
         state.set_global_risk_level(RiskLevel.HIGH)
         state.set_sentiment_multiplier(1.0)
+        state.set_whale_dump_risk(False)  # Ensure whale risk is off
         
         # Test
         base_size = 100.0
@@ -355,7 +358,8 @@ class TestPositionSizing:
         
         state = get_shared_state()
         state.set_global_risk_level(RiskLevel.HIGH)
-        state.set_sentiment_multiplier(0.5)  # Very cautious sentiment
+        state.set_sentiment_multiplier(0.5)  # Very cautious
+        state.set_whale_dump_risk(False)  # Ensure whale risk is off sentiment
         
         # Test
         base_size = 100.0
@@ -439,6 +443,7 @@ def test_case_sentiment_half_risk_high():
     # Set conditions: Sentiment 0.5, Risk HIGH
     state.set_sentiment_multiplier(0.5)
     state.set_global_risk_level(RiskLevel.HIGH)
+    state.set_whale_dump_risk(False)  # Ensure whale risk is off
     
     # Test with base size 100
     base_size = 100.0
