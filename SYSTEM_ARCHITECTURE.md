@@ -429,7 +429,7 @@ The Streamlit dashboard provides real-time visualization of:
 | **Backtesting** | Pandas + NumPy | Vectorized strategy validation |
 | **State Management** | Threading + Singleton | Thread-safe shared state |
 | **Dashboard** | Streamlit + Plotly | Real-time visualization |
-| **Testing** | Pytest | 76 comprehensive tests |
+| **Testing** | Pytest | 72 comprehensive tests |
 
 ---
 
