@@ -6,6 +6,95 @@
 
 ---
 
+## 📋 Prerequisites
+
+Before running AlphaWEEX, ensure you have:
+
+### System Requirements
+- **Python**: 3.10 or higher (check: `python --version`)
+- **Operating System**: Linux, macOS, or Windows with WSL
+- **Memory**: 2GB RAM minimum, 4GB recommended for full operation
+- **Disk Space**: 500MB for dependencies and logs
+
+### API Keys Required
+- **WEEX Exchange** (or Binance for demo mode)
+  - API Key and Secret with trading permissions
+  - Get at: [WEEX API Portal](https://www.weex.com/api-management)
+  
+- **DeepSeek API**
+  - API key for V3 Architect and R1 Auditor models
+  - Get at: [DeepSeek Platform](https://platform.deepseek.com)
+  
+- **Alpaca Markets** (Free Tier Available)
+  - API Key and Secret for TradFi Oracle
+  - Get at: [Alpaca Dashboard](https://alpaca.markets)
+
+### Optional
+- Docker (for containerized deployment)
+- Make utility (for simplified commands)
+
+---
+
+## ⚡ Quick Start for Judges (2 Minutes)
+
+Get AlphaWEEX running in 2 minutes with these simple commands:
+
+### Step 0: Configure API Keys (30 seconds)
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your credentials:
+# - WEEX_API_KEY and WEEX_API_SECRET (or Binance for demo)
+# - DEEPSEEK_API_KEY (for R1/V3 reasoning models)
+# - ALPACA_API_KEY and ALPACA_SECRET_KEY (for TradFi Oracle - free tier available)
+```
+
+**Note**: You can test with demo mode by setting `DEMO_MODE=true` in `.env`
+
+### Step 1-4: Install and Run
+
+```bash
+# 1. Install dependencies and run tests (1 minute)
+make install && make test
+
+# 2. Verify system integrity
+python scripts/check_integrity.py
+
+# 3. (Optional) Start paper trading
+make run-paper
+
+# 4. (Optional) Launch dashboard
+make dashboard
+```
+
+### What Just Happened?
+
+✅ **72 tests passed** - Full test coverage verified  
+✅ **All modules imported** - System integrity confirmed  
+✅ **SharedState singleton** - Global risk management ready  
+✅ **5-Layer Shield active** - TradFi Oracle + Narrative Pulse + Adversarial Testing + Shadow Engine + Kill-Switch
+
+### Architecture Overview
+
+See [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) for complete technical details on:
+- **Recursive Evolution Loop**: V3 Architect ↔ R1 Auditor ↔ Strategy
+- **5-Layer Safety Shield**: Multiple redundant protection mechanisms
+- **Data Flow**: WEEX API → SharedState → Architect → Executor
+
+### Key Files to Review
+
+| File | Description |
+|------|-------------|
+| `SYSTEM_ARCHITECTURE.md` | Complete system architecture and data flow |
+| `scripts/check_integrity.py` | Final integrity verification script |
+| `main.py` | Main orchestrator coordinating all components |
+| `active_logic.py` | Current live trading strategy (auto-evolved) |
+| `tests/` | 72 comprehensive tests (adversary, shadow, narrative, integration) |
+
+---
+
 ## 🌟 Vision
 
 **The Future of Autonomous Trading**
@@ -303,6 +392,91 @@ FLASH_CRASH_TEST = -0.20         # -20% stress test
 
 - [PHASE3_QUICKSTART.md](PHASE3_QUICKSTART.md) - Alpha Explorer & Backtester
 - [PHASE4_QUICKSTART.md](PHASE4_QUICKSTART.md) - Oracle & Sentiment Agent
+
+---
+
+## 🔧 Troubleshooting
+
+### Common Issues and Solutions
+
+#### "ModuleNotFoundError: No module named X"
+**Cause**: Dependencies not installed or virtual environment not activated  
+**Solution**:
+```bash
+# Ensure you're in a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Reinstall dependencies
+pip install -r requirements.txt
+```
+
+#### "API Connection Failed" or "Authentication Error"
+**Cause**: Missing or invalid API keys  
+**Solution**:
+```bash
+# Verify .env file exists and has all required keys
+cat .env | grep -E "API_KEY|SECRET"
+
+# Check for trailing spaces or quotes in .env values
+# Correct format: WEEX_API_KEY=your_key_here (no quotes)
+```
+
+#### "External API Timeout" (api.alternative.me or data.alpaca.markets)
+**Cause**: Firewall blocking external data sources  
+**Solution**:
+```bash
+# Skip live API tests
+pytest tests/ -k "not test_live" -v
+
+# Or configure firewall to allow:
+# - api.alternative.me (Fear & Greed Index)
+# - data.alpaca.markets (TradFi data)
+```
+
+#### Test Failures with "72 tests expected"
+**Cause**: Python version incompatibility or missing dependencies  
+**Solution**:
+```bash
+# Verify Python version (requires 3.10+)
+python --version
+
+# Clean install
+rm -rf venv
+python -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+make test
+```
+
+#### "SharedState singleton not accessible"
+**Cause**: Import path issues or corrupted installation  
+**Solution**:
+```bash
+# Quick diagnostic
+python -c "from data.shared_state import get_shared_state; print('✅ Core imports working')"
+
+# If fails, reinstall in development mode
+pip install -e .
+```
+
+#### General Debugging
+Enable debug logging to see detailed operation:
+```bash
+# In your script or .env
+LOG_LEVEL=DEBUG
+```
+
+#### Still Having Issues?
+- Check the GitHub Issues for similar problems
+- Review `SYSTEM_ARCHITECTURE.md` for system design context
+- Examine log files in the `logs/` directory
+- Open a new issue with:
+  - Python version (`python --version`)
+  - OS and version
+  - Full error traceback
+  - Steps to reproduce
 
 ---
 
