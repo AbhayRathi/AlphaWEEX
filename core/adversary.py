@@ -16,9 +16,13 @@ import logging
 import os
 import json
 import time
+import re
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import copy
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Try to import optional dependencies
 try:
@@ -26,7 +30,6 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning("requests not available - DeepSeek integration disabled")
 
 try:
@@ -34,11 +37,7 @@ try:
     NUMPY_AVAILABLE = True
 except ImportError:
     NUMPY_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning("numpy not available - some calculations may be limited")
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 class PsychologicalBiasDetector:
@@ -782,15 +781,11 @@ Respond ONLY with valid JSON, no additional text."""
                 response_data = response.json()
                 content = response_data['choices'][0]['message']['content']
                 
-                # Parse JSON response
-                # Remove markdown code blocks if present
+                # Parse JSON response - remove markdown code blocks if present
                 content = content.strip()
-                if content.startswith('```json'):
-                    content = content[7:]
-                if content.startswith('```'):
-                    content = content[3:]
-                if content.endswith('```'):
-                    content = content[:-3]
+                # Use regex to remove markdown code blocks more robustly
+                content = re.sub(r'^```(?:json)?\s*', '', content, flags=re.MULTILINE)
+                content = re.sub(r'```\s*$', '', content, flags=re.MULTILINE)
                 content = content.strip()
                 
                 result = json.loads(content)
@@ -829,11 +824,9 @@ Respond ONLY with valid JSON, no additional text."""
             Sanitized text
         """
         # Remove any potential file paths, IPs, etc.
-        # This is a basic implementation - extend as needed
         sanitized = text
         
-        # Remove common sensitive patterns (this is illustrative)
-        import re
+        # Remove common sensitive patterns
         sanitized = re.sub(r'/home/[^\s]+', '[PATH]', sanitized)
         sanitized = re.sub(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[IP]', sanitized)
         
