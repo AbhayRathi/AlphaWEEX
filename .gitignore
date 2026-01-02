@@ -38,6 +38,14 @@ active_logic.py.backup
 *.log
 data/reasoning_logs.jsonl
 
+# Databases and generated data
+data/*.db
+data/*.db-journal
+data/demo_*.db
+data/test_*.db
+data/prompts/
+data/demo_prompts/
+
 # Testing
 .pytest_cache/
 .coverage
