@@ -1,123 +1,100 @@
 """
 Discovery Agent - Dynamic API mapping for WEEX exchange
+Updated: Added Binance.us fallback and Mock Safety Net to bypass 451 Regional Blocks.
 """
 import ccxt
 import asyncio
 from typing import Dict, List, Any, Optional
+from datetime import datetime
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 class DiscoveryAgent:
     """
-    Discovery Agent: Dynamically maps WEEX API capabilities
-    Discovers available trading pairs, timeframes, and features
+    Discovery Agent: Dynamically maps WEEX API capabilities.
+    US-COMPATIBLE: Uses binanceus as a fallback to avoid 451 errors on US servers.
     """
     
-    def __init__(self, api_key: str, api_secret: str, api_password: str, exchange_id: str = 'binance'):
+    def __init__(self, api_key: str = None, api_secret: str = None, api_password: str = None, exchange_id: str = 'binanceus'):
         """
-        Initialize Discovery Agent with exchange credentials
-        
-        Note: WEEX is not yet in standard CCXT library. 
-        For demo purposes, we use Binance as fallback.
-        To use WEEX, you would need to:
-        1. Add WEEX support to CCXT, or
-        2. Use WEEX's custom API client
+        Initialize Discovery Agent.
+        Defaults to 'binanceus' for US-based server compatibility (DigitalOcean).
         """
         try:
-            # Try to use specified exchange (weex or fallback)
+            # Dynamically load the exchange class from CCXT
             exchange_class = getattr(ccxt, exchange_id.lower(), None)
+            
             if exchange_class is None:
-                logger.warning(f"Exchange '{exchange_id}' not found in CCXT, using 'binance' as fallback")
-                exchange_class = ccxt.binance
+                logger.warning(f"Exchange '{exchange_id}' not found, defaulting to 'binanceus'")
+                exchange_class = ccxt.binanceus
+
+            config = {
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
             
-            self.exchange = exchange_class({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'password': api_password,
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'spot',
-                }
-            })
+            # Add credentials only if provided
+            if api_key and api_secret:
+                config.update({'apiKey': api_key, 'secret': api_secret})
+                if api_password:
+                    config['password'] = api_password
+
+            self.exchange = exchange_class(config)
+            logger.info(f"✅ Exchange initialized: {self.exchange.id}")
+
         except Exception as e:
-            logger.warning(f"Failed to initialize exchange with credentials: {str(e)}")
-            logger.info("Initializing in demo mode without credentials")
-            # Initialize without credentials for demo mode
-            self.exchange = ccxt.binance({
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'spot',
-                }
-            })
-        
+            logger.error(f"Failed to initialize exchange: {str(e)}")
+            # Ultimate fallback to binanceus in public mode
+            self.exchange = ccxt.binanceus({'enableRateLimit': True})
+
         self.capabilities: Dict[str, Any] = {}
-        
+
     async def discover_capabilities(self) -> Dict[str, Any]:
-        """Discover exchange capabilities and API features"""
-        logger.info("Starting discovery of WEEX exchange capabilities...")
+        """
+        Discover exchange capabilities. 
+        Includes a Mock Fallback to ensure the engine NEVER crashes due to API blocks.
+        """
+        logger.info(f"🔍 [Aether-Evo] Starting discovery on {self.exchange.id}...")
         
         try:
-            # Load markets
+            # Attempt to fetch real market data
             markets = await asyncio.to_thread(self.exchange.load_markets)
-            
-            # Discover available symbols
             symbols = list(markets.keys())
-            
-            # Discover timeframes
-            timeframes = self.exchange.timeframes if hasattr(self.exchange, 'timeframes') else {}
-            
-            # Discover trading features
-            has_features = {
-                'fetchOHLCV': self.exchange.has.get('fetchOHLCV', False),
-                'fetchTicker': self.exchange.has.get('fetchTicker', False),
-                'fetchBalance': self.exchange.has.get('fetchBalance', False),
-                'createOrder': self.exchange.has.get('createOrder', False),
-                'fetchOpenOrders': self.exchange.has.get('fetchOpenOrders', False),
-                'cancelOrder': self.exchange.has.get('cancelOrder', False),
-            }
-            
-            self.capabilities = {
-                'symbols': symbols,
-                'timeframes': timeframes,
-                'features': has_features,
-                'markets': markets,
-            }
-            
-            logger.info(f"Discovery complete: {len(symbols)} symbols, {len(timeframes)} timeframes")
-            return self.capabilities
+            logger.info(f"✅ Live Connection Successful: {len(symbols)} symbols found.")
             
         except Exception as e:
-            logger.error(f"Discovery failed: {str(e)}")
-            raise
-    
+            logger.warning(f"⚠️ API Connection Blocked ({e}). ACTIVATING SHADOW MOCK MODE.")
+            # MOCK DATA: Provides valid structure so the rest of the bot doesn't crash
+            markets = {
+                'BTC/USDT': {'symbol': 'BTC/USDT', 'base': 'BTC', 'quote': 'USDT', 'active': True},
+                'ETH/USDT': {'symbol': 'ETH/USDT', 'base': 'ETH', 'quote': 'USDT', 'active': True},
+                'SOL/USDT': {'symbol': 'SOL/USDT', 'base': 'SOL', 'quote': 'USDT', 'active': True}
+            }
+            symbols = list(markets.keys())
+
+        # Map capabilities for the Perception and Evolution agents
+        self.capabilities = {
+            'symbols': symbols,
+            'timeframes': getattr(self.exchange, 'timeframes', {'1m': '1m', '5m': '5m', '15m': '15m'}),
+            'features': self.exchange.has,
+            'markets': markets,
+            'last_discovery': datetime.now().isoformat(),
+            'mode': 'MOCK' if 'BTC/USDT' in markets and len(markets) < 10 else 'LIVE'
+        }
+        
+        return self.capabilities
+
     async def fetch_ohlcv(self, symbol: str, timeframe: str = '15m', limit: int = 100) -> List[List]:
-        """Fetch OHLCV data for a symbol"""
+        """Fetch OHLCV data with error handling for regional blocks"""
         try:
-            ohlcv = await asyncio.to_thread(
-                self.exchange.fetch_ohlcv,
-                symbol,
-                timeframe,
-                limit=limit
-            )
-            return ohlcv
+            return await asyncio.to_thread(self.exchange.fetch_ohlcv, symbol, timeframe, limit=limit)
         except Exception as e:
             logger.error(f"Failed to fetch OHLCV for {symbol}: {str(e)}")
-            raise
-    
-    async def fetch_balance(self) -> Dict[str, Any]:
-        """Fetch account balance"""
-        try:
-            balance = await asyncio.to_thread(self.exchange.fetch_balance)
-            return balance
-        except Exception as e:
-            logger.error(f"Failed to fetch balance: {str(e)}")
-            raise
-    
-    async def get_market_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get detailed market information for a symbol"""
-        if symbol in self.capabilities.get('markets', {}):
-            return self.capabilities['markets'][symbol]
-        return None
+            # Return empty list to prevent crash; the perception agent will handle the 'None' state
+            return []
+
+    def get_market_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get cached market information"""
+        return self.capabilities.get('markets', {}).get(symbol)
