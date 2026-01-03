@@ -24,6 +24,11 @@ from agents.narrative import NarrativePulse
 from core.adversary import AdversarialAlpha
 from core.shadow_engine import ShadowEngine
 
+# Predator Suite imports (Aether-Evo Phase)
+from agents.adversary import BehavioralAdversary
+from agents.reconciliation_loop import IntelligenceLedger, ReconciliationAuditor
+from agents.evolutionary_mutator import EvolutionaryMutator
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -43,6 +48,10 @@ class AetherEvo:
     5. Stochastic Alpha Explorer - Generates novel hypotheses every 6h (Phase 3)
     6. Vectorized Backtester - Validates strategies before deployment (Phase 3)
     7. Reasoning Logger - Logs R1 traces for dashboard (Phase 3)
+    8. Predator Suite - Behavioral analysis, reconciliation, and evolution (Aether-Evo)
+       - BehavioralAdversary - "Dark Mirror" for psychological analysis
+       - ReconciliationAuditor - "The Auditor" for prediction validation
+       - EvolutionaryMutator - "DNA Patch" for self-improvement
     """
     
     def __init__(self, config: AetherConfig):
@@ -119,6 +128,33 @@ class AetherEvo:
         )
         
         logger.info("✅ Wild Imagination modules initialized (Adversary, Shadow Engine, Narrative)")
+        
+        # Predator Suite (Aether-Evo Phase)
+        # Initialize the three core agents for behavioral analysis and self-improvement
+        self.behavioral_adversary = BehavioralAdversary(
+            deepseek_api_key=config.deepseek.api_key,
+            model=config.deepseek.model,
+            use_shadow_mode=False,  # Will auto-activate on 451 errors
+            enable_cot=True
+        )
+        
+        self.intelligence_ledger = IntelligenceLedger(
+            db_path="data/intelligence_ledger.db"
+        )
+        
+        self.reconciliation_auditor = ReconciliationAuditor(
+            ledger=self.intelligence_ledger,
+            price_fetcher=None  # Will be set up with actual price fetcher
+        )
+        
+        self.evolutionary_mutator = EvolutionaryMutator(
+            prompts_dir="data/prompts",
+            deepseek_api_key=config.deepseek.api_key,
+            model=config.deepseek.model,
+            evolution_interval_hours=24
+        )
+        
+        logger.info("✅ Predator Suite initialized (Behavioral Adversary, Reconciliation Auditor, Evolutionary Mutator)")
         
         self.running = False
         self.symbol = config.trading.symbol
@@ -370,11 +406,174 @@ class AetherEvo:
                 logger.error(f"Error in narrative loop: {e}")
                 await asyncio.sleep(60)  # Retry after 1 minute on error
     
+    async def predator_suite_loop(self):
+        """
+        Predator Suite Loop - Behavioral Analysis, Reconciliation, and Evolution
+        
+        This loop orchestrates the three Predator Suite agents:
+        1. BehavioralAdversary - Analyzes market psychology every 15 minutes
+        2. ReconciliationAuditor - Audits predictions every 1h, 4h, 12h
+        3. EvolutionaryMutator - Evolves prompts every 24 hours
+        """
+        logger.info("🎯 Predator Suite monitoring started...")
+        
+        # Track last audit times
+        last_audit_1h = datetime.now()
+        last_audit_4h = datetime.now()
+        last_audit_12h = datetime.now()
+        last_evolution = datetime.now()
+        
+        while self.running:
+            try:
+                current_time = datetime.now()
+                
+                # 1. Run behavioral analysis with latest market data
+                try:
+                    ohlcv = await self.discovery.fetch_ohlcv(self.symbol, '15m', 100)
+                    if ohlcv:
+                        current_price = ohlcv[-1][4]
+                        
+                        # Calculate some basic indicators for analysis
+                        closes = [candle[4] for candle in ohlcv[-20:]]
+                        rsi = self._calculate_simple_rsi(closes)
+                        price_change = ((closes[-1] - closes[0]) / closes[0]) * 100
+                        
+                        market_data = {
+                            'price': current_price,
+                            'rsi': rsi,
+                            'price_change_pct': price_change,
+                            'volume': ohlcv[-1][5] if len(ohlcv[-1]) > 5 else 0,
+                            'recent_lows': [min([c[3] for c in ohlcv[-i-5:-i]]) for i in range(0, 15, 5)]
+                        }
+                        
+                        # Get sentiment from narrative pulse
+                        sentiment = "Neutral"
+                        try:
+                            narrative_state = self.narrative.get_current_narrative()
+                            if narrative_state:
+                                sentiment = narrative_state.get('sentiment', 'Neutral')
+                        except:
+                            pass
+                        
+                        # Run behavioral analysis
+                        analysis = self.behavioral_adversary.analyze_psychology(
+                            market_data,
+                            sentiment=sentiment,
+                            narrative=None
+                        )
+                        
+                        # Record prediction in ledger
+                        if analysis.get('detected_archetype') != 'NEUTRAL':
+                            self.intelligence_ledger.record_prediction(
+                                predicted_bias=analysis['predicted_bias'],
+                                predicted_outcome=analysis['predicted_outcome'],
+                                confidence=analysis['confidence'],
+                                market_regime=analysis['market_regime'],
+                                archetype=analysis['detected_archetype'],
+                                signal=analysis['signal'],
+                                price_at_prediction=current_price
+                            )
+                            
+                            logger.info(f"🎯 Behavioral Analysis: {analysis['detected_archetype']} "
+                                      f"-> {analysis['predicted_outcome']} (Confidence: {analysis['confidence']:.2f})")
+                
+                except Exception as e:
+                    logger.error(f"Error in behavioral analysis: {e}")
+                
+                # 2. Run reconciliation audits at appropriate intervals
+                try:
+                    # Get current price for audits
+                    ohlcv = await self.discovery.fetch_ohlcv(self.symbol, '1m', 1)
+                    current_price = ohlcv[-1][4] if ohlcv else None
+                    
+                    if current_price:
+                        # 1-hour audit
+                        if (current_time - last_audit_1h).total_seconds() >= 3600:
+                            logger.info("🔍 Running 1-hour reconciliation audit...")
+                            self.reconciliation_auditor._audit_timeframe("1h", 1, current_price)
+                            last_audit_1h = current_time
+                        
+                        # 4-hour audit
+                        if (current_time - last_audit_4h).total_seconds() >= 14400:
+                            logger.info("🔍 Running 4-hour reconciliation audit...")
+                            self.reconciliation_auditor._audit_timeframe("4h", 4, current_price)
+                            last_audit_4h = current_time
+                        
+                        # 12-hour audit
+                        if (current_time - last_audit_12h).total_seconds() >= 43200:
+                            logger.info("🔍 Running 12-hour reconciliation audit...")
+                            self.reconciliation_auditor._audit_timeframe("12h", 12, current_price)
+                            last_audit_12h = current_time
+                            
+                            # Display audit statistics
+                            stats = self.intelligence_ledger.get_statistics()
+                            logger.info(f"📊 Prediction Stats: Total={stats['total_predictions']}, "
+                                      f"Avg Score 1h={stats['avg_score_1h']:.2f}")
+                
+                except Exception as e:
+                    logger.error(f"Error in reconciliation audit: {e}")
+                
+                # 3. Run evolutionary mutation every 24 hours
+                try:
+                    if (current_time - last_evolution).total_seconds() >= 86400:
+                        logger.info("🧬 Running evolutionary mutation cycle...")
+                        
+                        # Get failed predictions
+                        failed_predictions = self.reconciliation_auditor.get_failed_predictions_for_learning(top_n=5)
+                        
+                        if failed_predictions:
+                            logger.info(f"Found {len(failed_predictions)} failed predictions for learning")
+                            
+                            # Evolve the prompt
+                            new_prompt = self.evolutionary_mutator.evolve_prompt(
+                                failed_predictions,
+                                force=True
+                            )
+                            
+                            if new_prompt:
+                                logger.info(f"✅ Prompt evolved to v{self.evolutionary_mutator.current_version}")
+                            else:
+                                logger.info("ℹ️  No prompt evolution this cycle")
+                        else:
+                            logger.info("ℹ️  No failed predictions to learn from")
+                        
+                        last_evolution = current_time
+                
+                except Exception as e:
+                    logger.error(f"Error in evolutionary mutation: {e}")
+                
+                # Wait 15 minutes before next cycle (aligned with reasoning interval)
+                await asyncio.sleep(900)
+                
+            except Exception as e:
+                logger.error(f"Error in predator suite loop: {e}")
+                await asyncio.sleep(60)
+    
+    def _calculate_simple_rsi(self, prices: list, period: int = 14) -> float:
+        """Calculate simple RSI for behavioral analysis"""
+        if len(prices) < period + 1:
+            return 50.0
+        
+        deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+        gains = [d if d > 0 else 0 for d in deltas]
+        losses = [-d if d < 0 else 0 for d in deltas]
+        
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return rsi
+    
     async def run(self):
         """Run the Aether-Evo engine"""
         logger.info("=" * 60)
         logger.info("🌟 AETHER-EVO: SELF-EVOLVING WEEX ENGINE 🌟")
-        logger.info("Phase 3: Alpha Factory & Reasoning Visualizer")
+        logger.info("Predator Suite: Behavioral Analysis & Self-Evolution")
         logger.info("=" * 60)
         
         # Initialize
@@ -386,7 +585,7 @@ class AetherEvo:
         self.running = True
         
         try:
-            # Start all loops concurrently (including Phase 3 explorer and Phase 5 narrative)
+            # Start all loops concurrently (including Predator Suite)
             await asyncio.gather(
                 self.reasoning.run_loop(self.symbol),
                 self.evolution_check_loop(),
@@ -394,6 +593,7 @@ class AetherEvo:
                 self.status_loop(),
                 self.explorer_loop(),  # Phase 3: Explorer agent
                 self.narrative_loop(),  # Phase 5: Narrative monitoring
+                self.predator_suite_loop(),  # Predator Suite: Behavioral analysis & evolution
             )
         except KeyboardInterrupt:
             logger.info("\n👋 Shutdown requested by user...")
