@@ -144,8 +144,10 @@ class WEEXv2Client:
             List of candles: [[timestamp, open, high, low, close, volume], ...]
         """
         try:
+            import urllib.parse
             path = "/capi/v2/market/candles"
-            query_params = f"?symbol={symbol}&interval={interval}&limit={limit}"
+            # URL encode parameters
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&interval={urllib.parse.quote(interval)}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             

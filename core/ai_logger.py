@@ -251,6 +251,7 @@ class AITradingLogger:
                 "errors": 0
             }
             
+            # Use streaming to handle large files efficiently
             with open(self.log_file, 'r') as f:
                 for line in f:
                     stats["total_lines"] += 1
@@ -271,10 +272,22 @@ class AITradingLogger:
                         elif entry_type == "ERROR":
                             stats["errors"] += 1
                     except json.JSONDecodeError:
+                        # Skip malformed lines
                         continue
             
             return stats
             
+        except FileNotFoundError:
+            logger.warning(f"Log file not found: {self.log_file}")
+            return {
+                "total_lines": 0,
+                "heartbeats": 0,
+                "trade_decisions": 0,
+                "order_executions": 0,
+                "tp_triggers": 0,
+                "sl_triggers": 0,
+                "errors": 0
+            }
         except Exception as e:
             logger.error(f"Failed to get log stats: {str(e)}")
             return {}

@@ -87,8 +87,10 @@ def demo_ai_logger():
     print("DEMO 3: AI Trading Logger")
     print("=" * 60)
     
-    # Create temporary log file
-    log_file = "/tmp/demo_trading.log"
+    # Create temporary log file using cross-platform approach
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    log_file = os.path.join(temp_dir, "demo_trading.log")
     logger = AITradingLogger(log_file)
     
     print(f"✅ Logger initialized: {log_file}")

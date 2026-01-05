@@ -172,7 +172,10 @@ class CompetitionTradingBot:
         sma_50 = self.calculate_sma(closes, 50)
         
         # Price change
-        price_change_pct = ((current_price - closes[0]) / closes[0]) * 100 if len(closes) > 1 else 0.0
+        if len(closes) > 1 and closes[0] != 0:
+            price_change_pct = ((current_price - closes[0]) / closes[0]) * 100
+        else:
+            price_change_pct = 0.0
         
         # Volume analysis
         avg_volume = sum(volumes[-20:]) / min(20, len(volumes)) if volumes else 0.0
