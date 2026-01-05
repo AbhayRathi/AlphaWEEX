@@ -45,6 +45,10 @@ data/demo_*.db
 data/test_*.db
 data/prompts/
 data/demo_prompts/
+*.db
+*.db-journal
+trading_memory.db
+test_*.db
 
 # Testing
 .pytest_cache/
