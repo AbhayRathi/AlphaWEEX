@@ -147,7 +147,7 @@ class WEEXv2Client:
             import urllib.parse
             path = "/capi/v2/market/candles"
             # URL encode parameters
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&interval={urllib.parse.quote(interval)}&limit={limit}"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={urllib.parse.quote(interval)}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -181,10 +181,11 @@ class WEEXv2Client:
             True if successful, False otherwise
         """
         try:
-            path = "/capi/v2/account/setLeverage"
+            path = "/capi/v2/account/leverage"
             body = {
                 "symbol": symbol,
-                "leverage": leverage
+                "marginMode": "crossed",
+                "leverage": str(leverage)
             }
             
             response = self.send_weex_request("POST", path, body=body)
@@ -193,6 +194,9 @@ class WEEXv2Client:
                 data = response.json()
                 if data.get('code') == 0 or data.get('success'):
                     logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
+                    return True
+                elif "already set" in str(data.get('message', '')).lower():
+                    logger.info(f"✅ Leverage already set to {leverage}x for {symbol}")
                     return True
                 else:
                     logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
