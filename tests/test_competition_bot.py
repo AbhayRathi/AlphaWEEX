@@ -319,19 +319,24 @@ class TestCompetitionBotLogic:
         """Test BUY signal generation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(use_llm=False)  # Use RSI/SMA fallback for testing
         
-        # Create indicators suggesting BUY (oversold RSI)
-        indicators = {
-            "valid": True,
-            "current_price": 50000,
-            "rsi": 25,  # Oversold
-            "sma_20": 49000,
-            "sma_50": 48000,
-            "volume_ratio": 1.5
-        }
+        # Create k-lines data that would suggest BUY (price trending down, RSI oversold)
+        klines = []
+        base_price = 52000
+        for i in range(50):
+            # Trending down to create oversold condition
+            price = base_price - (i * 50)
+            klines.append([
+                1640000000000 + i * 60000,  # timestamp
+                price,  # open
+                price + 50,  # high
+                price - 50,  # low
+                price,  # close
+                1000000  # volume
+            ])
         
-        signal = bot.generate_signal(indicators, "cmt_btcusdt")
+        signal = bot.generate_signal(klines, "cmt_btcusdt")
         
         assert signal["action"] == "BUY"
         assert signal["confidence"] > 0.6
@@ -340,19 +345,24 @@ class TestCompetitionBotLogic:
         """Test SELL signal generation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(use_llm=False)  # Use RSI/SMA fallback for testing
         
-        # Create indicators suggesting SELL (overbought RSI)
-        indicators = {
-            "valid": True,
-            "current_price": 50000,
-            "rsi": 76,  # Overbought
-            "sma_20": 51000,
-            "sma_50": 52000,
-            "volume_ratio": 1.0
-        }
+        # Create k-lines data that would suggest SELL (price trending up, RSI overbought)
+        klines = []
+        base_price = 48000
+        for i in range(50):
+            # Trending up to create overbought condition
+            price = base_price + (i * 50)
+            klines.append([
+                1640000000000 + i * 60000,  # timestamp
+                price,  # open
+                price + 50,  # high
+                price - 50,  # low
+                price,  # close
+                1000000  # volume
+            ])
         
-        signal = bot.generate_signal(indicators, "cmt_btcusdt")
+        signal = bot.generate_signal(klines, "cmt_btcusdt")
         
         assert signal["action"] == "SELL"
         assert signal["confidence"] > 0.6

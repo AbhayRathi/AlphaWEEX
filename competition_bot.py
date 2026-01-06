@@ -1,5 +1,5 @@
 """
-WEEX AI Trading Bot - Competition-Ready Implementation
+WEEX AI Trading Bot - Competition-Ready Implementation with LLM Strategy
 
 Requirements:
 1. Working Auth - WEEX v2 API with proper signature
@@ -8,6 +8,8 @@ Requirements:
 4. Risk Management - 2% TP, 1% SL
 5. Enhanced AI Logging - JSON format with 10-min heartbeat
 6. Safety Guardrails - 20x leverage, position check, 521 cooldown
+7. LLM-Based Strategy - Autonomous reasoning with OpenAI/Anthropic
+8. SQLite Persistence - Trade history and performance tracking
 """
 import os
 import time
@@ -18,6 +20,8 @@ from dotenv import load_dotenv
 
 from core.weex_v2_client import WEEXv2Client
 from core.ai_logger import AITradingLogger
+from core.db import DatabaseManager
+from core.strategy_engine import StrategyEngine
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +38,11 @@ API_KEY = os.getenv('API_KEY') or os.getenv('WEEX_API_KEY')
 API_SECRET = os.getenv('API_SECRET') or os.getenv('WEEX_API_SECRET')
 API_PASSWORD = os.getenv('API_PASSWORD') or os.getenv('WEEX_API_PASSWORD')
 
+# LLM Configuration
+LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # 'openai' or 'anthropic'
+LLM_API_KEY = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+LLM_MODEL = os.getenv('LLM_MODEL')  # Optional: override default model
+
 # Multi-Symbol Support
 SYMBOL_LIST = ["cmt_btcusdt", "cmt_ethusdt", "cmt_solusdt"]
 
@@ -48,18 +57,24 @@ MAIN_LOOP_INTERVAL = 30  # Check every 30 seconds
 
 class CompetitionTradingBot:
     """
-    Competition-Ready WEEX AI Trading Bot
+    Competition-Ready WEEX AI Trading Bot with LLM Strategy
     
     Features:
     - Multi-symbol trading
-    - K-lines based decision engine
+    - LLM-based autonomous decision making
     - TP/SL risk management
-    - Enhanced AI logging
+    - Enhanced AI logging with reasoning
+    - SQLite trade history persistence
     - Safety guardrails
     """
     
-    def __init__(self):
-        """Initialize the trading bot"""
+    def __init__(self, use_llm: bool = True):
+        """
+        Initialize the trading bot
+        
+        Args:
+            use_llm: If True, use LLM strategy. If False, fallback to RSI/SMA (default: True)
+        """
         # Validate API credentials
         if not API_KEY or not API_SECRET or not API_PASSWORD:
             raise ValueError("Missing API credentials. Please set API_KEY, API_SECRET, and API_PASSWORD in .env")
@@ -69,6 +84,30 @@ class CompetitionTradingBot:
         
         # Initialize AI logger
         self.ai_logger = AITradingLogger("ai_trading.log")
+        
+        # Initialize database manager
+        self.db = DatabaseManager("trading_memory.db")
+        
+        # Initialize strategy engine (LLM or fallback)
+        self.use_llm = use_llm
+        self.strategy_engine = None
+        
+        if use_llm:
+            if not LLM_API_KEY:
+                logger.warning("⚠️ No LLM API key found. Falling back to RSI/SMA strategy.")
+                self.use_llm = False
+            else:
+                try:
+                    self.strategy_engine = StrategyEngine(
+                        provider=LLM_PROVIDER,
+                        api_key=LLM_API_KEY,
+                        model=LLM_MODEL
+                    )
+                    logger.info(f"✅ LLM Strategy Engine enabled: {LLM_PROVIDER}")
+                except Exception as e:
+                    logger.error(f"Failed to initialize LLM: {str(e)}")
+                    logger.warning("⚠️ Falling back to RSI/SMA strategy")
+                    self.use_llm = False
         
         # Running flag
         self.running = False
@@ -193,17 +232,49 @@ class CompetitionTradingBot:
             "avg_volume": avg_volume
         }
     
-    def generate_signal(self, indicators: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    def generate_signal(self, klines: List[List], symbol: str) -> Dict[str, Any]:
         """
-        Generate trading signal based on indicators (Simple Decision Engine)
+        Generate trading signal using LLM or fallback to RSI/SMA
         
         Args:
-            indicators: Market indicators
+            klines: K-lines data
             symbol: Trading symbol
             
         Returns:
-            Signal dictionary with action, confidence, and reason
+            Signal dictionary with action, confidence, and reasoning
         """
+        # Get account balance (for LLM context)
+        # In a real implementation, fetch this from the API
+        balance = 1000.0  # Default balance
+        
+        if self.use_llm and self.strategy_engine:
+            # Use LLM-based strategy
+            try:
+                # Get recent performance from database
+                performance = self.db.get_recent_performance(limit=20)
+                
+                # Get LLM decision
+                decision = self.strategy_engine.get_decision(
+                    symbol=symbol,
+                    klines=klines,
+                    performance=performance,
+                    balance=balance,
+                    leverage=20
+                )
+                
+                return {
+                    "action": decision["action"],
+                    "confidence": decision["confidence"],
+                    "reason": decision["reasoning"]
+                }
+                
+            except Exception as e:
+                logger.error(f"LLM decision failed: {str(e)}, falling back to RSI/SMA")
+                # Fall through to RSI/SMA logic
+        
+        # Fallback: Use traditional RSI/SMA indicators
+        indicators = self.analyze_market(klines)
+        
         if not indicators.get("valid"):
             return {
                 "action": "HOLD",
@@ -315,6 +386,9 @@ class CompetitionTradingBot:
                     # Log trigger
                     self.ai_logger.log_tp_sl_trigger(symbol, trigger, entry_price, current_price, pnl_pct)
                     
+                    # Record trade exit in database
+                    self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                    
                     # Close position
                     success = self.client.close_position(symbol)
                     
@@ -345,17 +419,14 @@ class CompetitionTradingBot:
                 logger.debug(f"No data for {symbol}, skipping...")
                 return
             
-            # 2. Analyze market
-            indicators = self.analyze_market(klines)
+            # 2. Get current price for context
+            current_price = float(klines[-1][4])
             
-            if not indicators.get("valid"):
-                logger.debug(f"Invalid indicators for {symbol}: {indicators.get('reason')}")
-                return
+            # 3. Generate signal (LLM or RSI/SMA)
+            signal = self.generate_signal(klines, symbol)
             
-            # 3. Generate signal
-            signal = self.generate_signal(indicators, symbol)
-            
-            # 4. Log decision
+            # 4. Log decision with AI reasoning
+            indicators = self.analyze_market(klines) if not self.use_llm else {"current_price": current_price}
             self.ai_logger.log_trade_decision(
                 symbol=symbol,
                 action=signal["action"],
@@ -372,16 +443,26 @@ class CompetitionTradingBot:
                     return
                 
                 # Place BUY order
-                logger.info(f"🟢 BUY signal for {symbol}: {signal['reason']} (Confidence: {signal['confidence']:.2%})")
+                logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
                 
                 order = self.client.place_market_order(symbol, "BUY", POSITION_SIZE)
                 
                 if order:
+                    # Record trade entry in database
+                    self.db.record_trade_entry(
+                        symbol=symbol,
+                        side="BUY",
+                        price=current_price,
+                        size=POSITION_SIZE,
+                        reasoning=signal["reason"],
+                        confidence=signal["confidence"]
+                    )
+                    
                     self.ai_logger.log_order_execution(
                         symbol=symbol,
                         side="BUY",
                         size=POSITION_SIZE,
-                        price=indicators["current_price"],
+                        price=current_price,
                         order_id=order.get('orderId')
                     )
             
@@ -391,7 +472,15 @@ class CompetitionTradingBot:
                     logger.debug(f"No position to sell for {symbol}")
                     return
                 
-                logger.info(f"🔴 SELL signal for {symbol}: {signal['reason']} (Confidence: {signal['confidence']:.2%})")
+                logger.info(f"🔴 SELL signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
+                
+                # Get position details for P&L calculation
+                position = self.client.open_positions.get(symbol, {})
+                entry_price = float(position.get('entryPrice', current_price))
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                
+                # Record trade exit in database
+                self.db.record_trade_exit(symbol, current_price, pnl_pct)
                 
                 success = self.client.close_position(symbol)
                 
@@ -400,18 +489,24 @@ class CompetitionTradingBot:
                         symbol=symbol,
                         side="SELL",
                         size=POSITION_SIZE,
-                        price=indicators["current_price"],
+                        price=current_price,
                         order_id=None
                     )
             
-            # 6. Heartbeat logging (10-minute intervals)
-            sentiment = self.generate_sentiment(indicators)
+            # 6. Heartbeat logging (10-minute intervals) with AI reasoning
+            if self.use_llm and signal.get("reason"):
+                # Use LLM reasoning as sentiment
+                sentiment = f"AI: {signal['reason'][:150]}..."
+            else:
+                # Use traditional sentiment
+                sentiment = self.generate_sentiment(indicators)
+            
             self.ai_logger.log_heartbeat(
                 market_data={
                     "symbol": symbol,
-                    "price": indicators["current_price"],
-                    "rsi": indicators["rsi"],
-                    "sma_20": indicators["sma_20"]
+                    "price": current_price,
+                    "action": signal["action"],
+                    "confidence": signal["confidence"]
                 },
                 sentiment=sentiment
             )
@@ -453,10 +548,12 @@ class CompetitionTradingBot:
                     self.process_symbol(symbol)
                     time.sleep(2)  # Small delay between symbols
                 
-                # Display log stats every 10 iterations
+                # Display log stats and database performance every 10 iterations
                 if iteration % 10 == 0:
                     stats = self.ai_logger.get_log_stats()
+                    performance = self.db.get_recent_performance(limit=10)
                     logger.info(f"\n📈 Log Stats: {stats}")
+                    logger.info(f"💰 Performance: Win Rate={performance.get('win_rate', 0)*100:.1f}%, Total P&L={performance.get('total_pnl', 0):+.2f}%")
                 
                 # Wait before next iteration
                 logger.info(f"\n⏸️ Waiting {MAIN_LOOP_INTERVAL}s before next iteration...\n")
@@ -483,9 +580,78 @@ class CompetitionTradingBot:
         
         # Display final stats
         stats = self.ai_logger.get_log_stats()
-        logger.info(f"📊 Final Stats: {stats}")
+        logger.info(f"📊 Final Log Stats: {stats}")
+        
+        # Display final performance
+        performance = self.db.get_recent_performance(limit=50)
+        logger.info(f"💰 Final Performance:")
+        logger.info(f"   Total Trades: {performance.get('total_trades', 0)}")
+        logger.info(f"   Win Rate: {performance.get('win_rate', 0)*100:.1f}%")
+        logger.info(f"   Total P&L: {performance.get('total_pnl', 0):+.2f}%")
+        
+        # Display LLM usage stats if available
+        if self.use_llm and self.strategy_engine:
+            llm_stats = self.strategy_engine.get_usage_stats()
+            logger.info(f"🤖 LLM Usage:")
+            logger.info(f"   Total Calls: {llm_stats['total_calls']}")
+            logger.info(f"   Total Cost: ${llm_stats['total_cost_usd']:.4f}")
+            logger.info(f"   Avg Cost/Call: ${llm_stats['avg_cost_per_call']:.4f}")
+        
+        # Close database connection
+        self.db.close()
         
         logger.info("✅ Shutdown complete")
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Get system health status for monitoring
+        
+        Returns:
+            Dictionary with health metrics
+        """
+        import os
+        from pathlib import Path
+        
+        health = {
+            "timestamp": datetime.now().isoformat(),
+            "bot_running": self.running,
+            "llm_enabled": self.use_llm,
+        }
+        
+        # Database health
+        try:
+            db_path = Path("trading_memory.db")
+            health["database_available"] = db_path.exists()
+            health["database_size_mb"] = db_path.stat().st_size / 1e6 if db_path.exists() else 0
+            
+            # Recent performance
+            performance = self.db.get_recent_performance(limit=10)
+            health["recent_trades"] = performance.get("total_trades", 0)
+            health["win_rate"] = performance.get("win_rate", 0.0)
+            health["total_pnl"] = performance.get("total_pnl", 0.0)
+        except Exception as e:
+            health["database_error"] = str(e)
+        
+        # LLM health
+        if self.use_llm and self.strategy_engine:
+            try:
+                llm_stats = self.strategy_engine.get_usage_stats()
+                health["llm_provider"] = llm_stats["provider"]
+                health["llm_total_calls"] = llm_stats["total_calls"]
+                health["llm_total_cost_usd"] = llm_stats["total_cost_usd"]
+                health["llm_circuit_breaker_state"] = llm_stats["circuit_breaker_state"]
+            except Exception as e:
+                health["llm_error"] = str(e)
+        
+        # Log file health
+        try:
+            log_path = Path("ai_trading.log")
+            health["log_file_exists"] = log_path.exists()
+            health["log_file_size_mb"] = log_path.stat().st_size / 1e6 if log_path.exists() else 0
+        except Exception as e:
+            health["log_error"] = str(e)
+        
+        return health
 
 
 def main():
