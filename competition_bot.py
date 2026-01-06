@@ -589,10 +589,69 @@ class CompetitionTradingBot:
         logger.info(f"   Win Rate: {performance.get('win_rate', 0)*100:.1f}%")
         logger.info(f"   Total P&L: {performance.get('total_pnl', 0):+.2f}%")
         
+        # Display LLM usage stats if available
+        if self.use_llm and self.strategy_engine:
+            llm_stats = self.strategy_engine.get_usage_stats()
+            logger.info(f"🤖 LLM Usage:")
+            logger.info(f"   Total Calls: {llm_stats['total_calls']}")
+            logger.info(f"   Total Cost: ${llm_stats['total_cost_usd']:.4f}")
+            logger.info(f"   Avg Cost/Call: ${llm_stats['avg_cost_per_call']:.4f}")
+        
         # Close database connection
         self.db.close()
         
         logger.info("✅ Shutdown complete")
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Get system health status for monitoring
+        
+        Returns:
+            Dictionary with health metrics
+        """
+        import os
+        from pathlib import Path
+        
+        health = {
+            "timestamp": datetime.now().isoformat(),
+            "bot_running": self.running,
+            "llm_enabled": self.use_llm,
+        }
+        
+        # Database health
+        try:
+            db_path = Path("trading_memory.db")
+            health["database_available"] = db_path.exists()
+            health["database_size_mb"] = db_path.stat().st_size / 1e6 if db_path.exists() else 0
+            
+            # Recent performance
+            performance = self.db.get_recent_performance(limit=10)
+            health["recent_trades"] = performance.get("total_trades", 0)
+            health["win_rate"] = performance.get("win_rate", 0.0)
+            health["total_pnl"] = performance.get("total_pnl", 0.0)
+        except Exception as e:
+            health["database_error"] = str(e)
+        
+        # LLM health
+        if self.use_llm and self.strategy_engine:
+            try:
+                llm_stats = self.strategy_engine.get_usage_stats()
+                health["llm_provider"] = llm_stats["provider"]
+                health["llm_total_calls"] = llm_stats["total_calls"]
+                health["llm_total_cost_usd"] = llm_stats["total_cost_usd"]
+                health["llm_circuit_breaker_state"] = llm_stats["circuit_breaker_state"]
+            except Exception as e:
+                health["llm_error"] = str(e)
+        
+        # Log file health
+        try:
+            log_path = Path("ai_trading.log")
+            health["log_file_exists"] = log_path.exists()
+            health["log_file_size_mb"] = log_path.stat().st_size / 1e6 if log_path.exists() else 0
+        except Exception as e:
+            health["log_error"] = str(e)
+        
+        return health
 
 
 def main():

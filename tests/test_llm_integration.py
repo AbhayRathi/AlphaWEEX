@@ -303,6 +303,11 @@ class TestStrategyEngine:
             "confidence": 0.75,
             "reasoning": "Strong uptrend with high volume"
         })
+        # Mock usage for token tracking
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 500
+        mock_usage.completion_tokens = 100
+        mock_response.usage = mock_usage
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai_class.return_value = mock_client
         
@@ -351,6 +356,11 @@ class TestStrategyEngine:
             "confidence": 0.75,
             "reasoning": "Test"
         })
+        # Mock usage for token tracking
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 500
+        mock_usage.completion_tokens = 100
+        mock_response.usage = mock_usage
         mock_client.chat.completions.create.return_value = mock_response
         mock_openai_class.return_value = mock_client
         
@@ -379,6 +389,11 @@ class TestStrategyEngine:
         })
         mock_response = MagicMock()
         mock_response.content = [mock_content]
+        # Mock usage for token tracking
+        mock_usage = MagicMock()
+        mock_usage.input_tokens = 600
+        mock_usage.output_tokens = 120
+        mock_response.usage = mock_usage
         mock_client.messages.create.return_value = mock_response
         mock_anthropic_class.return_value = mock_client
         
@@ -393,6 +408,44 @@ class TestStrategyEngine:
         assert decision['action'] == "SELL"
         assert decision['confidence'] == 0.80
         assert "overbought" in decision['reasoning'].lower()
+    
+    @patch('core.strategy_engine.OPENAI_AVAILABLE', True)
+    @patch('core.strategy_engine.openai.OpenAI')
+    def test_get_usage_stats(self, mock_openai_class, mock_klines, mock_performance):
+        """Test LLM usage statistics tracking"""
+        # Mock the OpenAI response
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices[0].message.content = json.dumps({
+            "action": "BUY",
+            "confidence": 0.75,
+            "reasoning": "Test reasoning"
+        })
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 500
+        mock_usage.completion_tokens = 100
+        mock_response.usage = mock_usage
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai_class.return_value = mock_client
+        
+        engine = StrategyEngine(provider="openai", api_key="test_key")
+        
+        # Make a decision to accumulate stats
+        engine.get_decision(
+            symbol="cmt_btcusdt",
+            klines=mock_klines,
+            performance=mock_performance
+        )
+        
+        # Get usage stats
+        stats = engine.get_usage_stats()
+        
+        assert stats['total_calls'] == 1
+        assert stats['total_input_tokens'] == 500
+        assert stats['total_output_tokens'] == 100
+        assert stats['total_cost_usd'] > 0
+        assert stats['provider'] == 'openai'
+        assert stats['circuit_breaker_state'] == 'CLOSED'
 
 
 class TestCompetitionBotIntegration:
@@ -407,6 +460,8 @@ class TestCompetitionBotIntegration:
         monkeypatch.setenv("OPENAI_API_KEY", "test_openai_key")
         monkeypatch.setenv("LLM_PROVIDER", "openai")
     
+    @patch('competition_bot.LLM_API_KEY', 'test_openai_key')
+    @patch('competition_bot.LLM_PROVIDER', 'openai')
     @patch('core.strategy_engine.OPENAI_AVAILABLE', True)
     @patch('core.strategy_engine.openai.OpenAI')
     def test_bot_initialization_with_llm(self, mock_openai_class, mock_env, tmp_path):
@@ -433,6 +488,24 @@ class TestCompetitionBotIntegration:
         
         assert bot.use_llm is False
         assert bot.db is not None
+    
+    def test_bot_health_check(self, mock_env, tmp_path):
+        """Test bot health check method"""
+        from competition_bot import CompetitionTradingBot
+        
+        # Change to temp directory for database
+        os.chdir(tmp_path)
+        
+        bot = CompetitionTradingBot(use_llm=False)
+        
+        # Get health check
+        health = bot.health_check()
+        
+        assert 'timestamp' in health
+        assert 'bot_running' in health
+        assert 'llm_enabled' in health
+        assert 'database_available' in health
+        assert health['llm_enabled'] is False
 
 
 if __name__ == "__main__":

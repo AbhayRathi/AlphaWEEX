@@ -5,6 +5,7 @@ Replaces traditional RSI/SMA rules with AI reasoning using OpenAI or Anthropic.
 """
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime
 
@@ -26,6 +27,83 @@ except ImportError:
     logger.warning("Anthropic not available. Install with: pip install anthropic")
 
 
+class LLMCircuitBreaker:
+    """
+    Circuit breaker pattern for LLM failures
+    
+    Prevents cascading failures by temporarily disabling LLM calls
+    after repeated failures.
+    """
+    
+    def __init__(self, failure_threshold: int = 5, timeout_minutes: int = 15):
+        """
+        Initialize circuit breaker
+        
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            timeout_minutes: Minutes to wait before attempting retry
+        """
+        self.failure_threshold = failure_threshold
+        self.timeout_seconds = timeout_minutes * 60
+        self.failures = 0
+        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
+        self.last_failure_time = None
+    
+    def _should_attempt_reset(self) -> bool:
+        """Check if enough time has passed to attempt reset"""
+        if self.last_failure_time is None:
+            return True
+        return (time.time() - self.last_failure_time) >= self.timeout_seconds
+    
+    def call(self, func, *args, **kwargs):
+        """
+        Execute function with circuit breaker protection
+        
+        Args:
+            func: Function to execute
+            *args, **kwargs: Arguments to pass to function
+            
+        Returns:
+            Function result
+            
+        Raises:
+            Exception: If circuit is open
+        """
+        if self.state == 'OPEN':
+            if self._should_attempt_reset():
+                logger.info("Circuit breaker: Attempting reset (HALF_OPEN)")
+                self.state = 'HALF_OPEN'
+            else:
+                raise Exception(f"Circuit breaker OPEN: Too many LLM failures. Retry in {self.timeout_seconds - (time.time() - self.last_failure_time):.0f}s")
+        
+        try:
+            result = func(*args, **kwargs)
+            self._on_success()
+            return result
+        except Exception as e:
+            self._on_failure()
+            raise
+    
+    def _on_success(self):
+        """Reset circuit breaker on success"""
+        if self.state == 'HALF_OPEN':
+            logger.info("Circuit breaker: Reset successful (CLOSED)")
+        self.failures = 0
+        self.state = 'CLOSED'
+        self.last_failure_time = None
+    
+    def _on_failure(self):
+        """Record failure and potentially open circuit"""
+        self.failures += 1
+        self.last_failure_time = time.time()
+        
+        if self.failures >= self.failure_threshold:
+            logger.error(f"Circuit breaker: OPEN after {self.failures} failures")
+            self.state = 'OPEN'
+        else:
+            logger.warning(f"Circuit breaker: Failure {self.failures}/{self.failure_threshold}")
+
+
 class StrategyEngine:
     """
     LLM-powered trading strategy engine
@@ -36,6 +114,8 @@ class StrategyEngine:
     - Context-aware prompting with market data
     - Trade history memory integration
     - JSON response parsing
+    - Token usage tracking
+    - Circuit breaker for failure protection
     """
     
     def __init__(self, provider: Literal["openai", "anthropic"] = "openai",
@@ -75,6 +155,15 @@ class StrategyEngine:
             self.client = openai.OpenAI(api_key=api_key)
         elif provider == "anthropic":
             self.client = anthropic.Anthropic(api_key=api_key)
+        
+        # Initialize circuit breaker
+        self.circuit_breaker = LLMCircuitBreaker(failure_threshold=5, timeout_minutes=15)
+        
+        # Token usage tracking
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_calls = 0
+        self.total_cost_usd = 0.0
         
         logger.info(f"✅ StrategyEngine initialized: {provider} ({self.model})")
     
@@ -221,7 +310,7 @@ Respond only with the JSON object, no additional text."""
     
     def _call_openai(self, prompt: str) -> Dict[str, Any]:
         """
-        Call OpenAI API
+        Call OpenAI API with token tracking
         
         Args:
             prompt: Prompt text
@@ -230,6 +319,7 @@ Respond only with the JSON object, no additional text."""
             Parsed response dictionary
         """
         try:
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -241,6 +331,22 @@ Respond only with the JSON object, no additional text."""
                 response_format={"type": "json_object"}
             )
             
+            latency_ms = (time.time() - start_time) * 1000
+            
+            # Track token usage
+            usage = response.usage
+            self.total_input_tokens += usage.prompt_tokens
+            self.total_output_tokens += usage.completion_tokens
+            self.total_calls += 1
+            
+            # Estimate cost (GPT-4o-mini pricing: $0.15/1M input, $0.60/1M output)
+            input_cost = (usage.prompt_tokens / 1_000_000) * 0.15
+            output_cost = (usage.completion_tokens / 1_000_000) * 0.60
+            call_cost = input_cost + output_cost
+            self.total_cost_usd += call_cost
+            
+            logger.info(f"🤖 OpenAI call: {latency_ms:.0f}ms, {usage.prompt_tokens} in + {usage.completion_tokens} out tokens, ${call_cost:.4f}")
+            
             content = response.choices[0].message.content
             return json.loads(content)
             
@@ -250,7 +356,7 @@ Respond only with the JSON object, no additional text."""
     
     def _call_anthropic(self, prompt: str) -> Dict[str, Any]:
         """
-        Call Anthropic API
+        Call Anthropic API with token tracking
         
         Args:
             prompt: Prompt text
@@ -259,6 +365,7 @@ Respond only with the JSON object, no additional text."""
             Parsed response dictionary
         """
         try:
+            start_time = time.time()
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=1000,
@@ -267,6 +374,22 @@ Respond only with the JSON object, no additional text."""
                     {"role": "user", "content": prompt}
                 ]
             )
+            
+            latency_ms = (time.time() - start_time) * 1000
+            
+            # Track token usage
+            usage = response.usage
+            self.total_input_tokens += usage.input_tokens
+            self.total_output_tokens += usage.output_tokens
+            self.total_calls += 1
+            
+            # Estimate cost (Claude 3.5 Sonnet pricing: $3/1M input, $15/1M output)
+            input_cost = (usage.input_tokens / 1_000_000) * 3.0
+            output_cost = (usage.output_tokens / 1_000_000) * 15.0
+            call_cost = input_cost + output_cost
+            self.total_cost_usd += call_cost
+            
+            logger.info(f"🤖 Anthropic call: {latency_ms:.0f}ms, {usage.input_tokens} in + {usage.output_tokens} out tokens, ${call_cost:.4f}")
             
             content = response.content[0].text
             
@@ -287,7 +410,7 @@ Respond only with the JSON object, no additional text."""
                     performance: Dict[str, Any], balance: float = 1000.0,
                     leverage: int = 20) -> Dict[str, Any]:
         """
-        Get trading decision from LLM
+        Get trading decision from LLM with circuit breaker protection
         
         Args:
             symbol: Trading symbol
@@ -306,13 +429,16 @@ Respond only with the JSON object, no additional text."""
             # Build prompt
             prompt = self._build_prompt(symbol, klines, performance, balance, leverage)
             
-            # Call LLM based on provider
-            if self.provider == "openai":
-                response = self._call_openai(prompt)
-            elif self.provider == "anthropic":
-                response = self._call_anthropic(prompt)
-            else:
-                raise ValueError(f"Unknown provider: {self.provider}")
+            # Call LLM with circuit breaker protection
+            def _make_llm_call():
+                if self.provider == "openai":
+                    return self._call_openai(prompt)
+                elif self.provider == "anthropic":
+                    return self._call_anthropic(prompt)
+                else:
+                    raise ValueError(f"Unknown provider: {self.provider}")
+            
+            response = self.circuit_breaker.call(_make_llm_call)
             
             # Validate response
             action = response.get("action", "HOLD").upper()
@@ -344,3 +470,28 @@ Respond only with the JSON object, no additional text."""
                 "reasoning": f"Error getting LLM decision: {str(e)}. Defaulting to HOLD for safety.",
                 "error": str(e)
             }
+    
+    def get_usage_stats(self) -> Dict[str, Any]:
+        """
+        Get LLM usage statistics
+        
+        Returns:
+            Dictionary with token usage and cost metrics
+        """
+        avg_input = self.total_input_tokens / self.total_calls if self.total_calls > 0 else 0
+        avg_output = self.total_output_tokens / self.total_calls if self.total_calls > 0 else 0
+        avg_cost = self.total_cost_usd / self.total_calls if self.total_calls > 0 else 0
+        
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "total_calls": self.total_calls,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_cost_usd": self.total_cost_usd,
+            "avg_input_tokens": avg_input,
+            "avg_output_tokens": avg_output,
+            "avg_cost_per_call": avg_cost,
+            "circuit_breaker_state": self.circuit_breaker.state,
+            "circuit_breaker_failures": self.circuit_breaker.failures
+        }
