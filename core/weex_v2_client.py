@@ -137,7 +137,7 @@ class WEEXv2Client:
         
         Args:
             symbol: Trading symbol (e.g., "cmt_btcusdt")
-            interval: Time interval (1m, 5m, 15m, 1h, etc.)
+            interval: Time interval (1m, 5m, 15m, 1h, etc.) - will be passed as granularity
             limit: Number of candles to retrieve (max 100)
             
         Returns:
@@ -146,8 +146,8 @@ class WEEXv2Client:
         try:
             import urllib.parse
             path = "/capi/v2/market/candles"
-            # URL encode parameters
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&interval={urllib.parse.quote(interval)}&limit={limit}"
+            # URL encode parameters - use 'granularity' instead of 'interval'
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={urllib.parse.quote(interval)}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -171,7 +171,7 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/setLeverage
+        Endpoint: POST /capi/v2/account/leverage
         
         Args:
             symbol: Trading symbol
@@ -181,10 +181,11 @@ class WEEXv2Client:
             True if successful, False otherwise
         """
         try:
-            path = "/capi/v2/account/setLeverage"
+            path = "/capi/v2/account/leverage"
             body = {
                 "symbol": symbol,
-                "leverage": leverage
+                "marginMode": "crossed",
+                "leverage": str(leverage)
             }
             
             response = self.send_weex_request("POST", path, body=body)
@@ -195,7 +196,12 @@ class WEEXv2Client:
                     logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
                     return True
                 else:
-                    logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
+                    error_message = data.get('message', 'Unknown error')
+                    # Handle "mode already set" errors gracefully
+                    if "already" in error_message.lower() or "mode" in error_message.lower():
+                        logger.info(f"ℹ️ Leverage/mode already set for {symbol}: {error_message}")
+                        return True
+                    logger.error(f"❌ Set leverage error: {error_message}")
                     return False
             else:
                 logger.error(f"❌ HTTP {response.status_code}: {response.text}")

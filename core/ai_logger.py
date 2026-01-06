@@ -93,32 +93,40 @@ class AITradingLogger:
         return True
     
     def log_trade_decision(self, symbol: str, action: str, reason: str, 
-                          confidence: float, indicators: Dict[str, Any]) -> None:
+                          confidence: float, indicators: Optional[Dict[str, Any]] = None) -> None:
         """
         Log a trading decision
         
         Args:
             symbol: Trading symbol
             action: Trade action (BUY, SELL, HOLD)
-            reason: Reason for decision
-            confidence: Confidence level (0.0 to 1.0)
-            indicators: Technical indicators used
+            reason: Reason for decision (ai_reasoning)
+            confidence: Confidence level (0-100 or 0.0-1.0, will be normalized)
+            indicators: Technical indicators used (optional)
         """
+        # Normalize confidence to 0-100 range if it's between 0-1
+        if confidence <= 1.0:
+            confidence_pct = confidence * 100
+        else:
+            confidence_pct = confidence
+        
         log_entry = {
             "type": "TRADE_DECISION",
             "timestamp": datetime.now().isoformat(),
             "symbol": symbol,
             "action": action,
-            "reason": reason,
-            "confidence": confidence,
-            "indicators": indicators
+            "ai_reasoning": reason,
+            "reason": reason,  # Keep for backward compatibility
+            "confidence": confidence_pct,
+            "indicators": indicators or {}
         }
         
         self._write_json_log(log_entry)
-        logger.info(f"📊 Decision: {action} {symbol} (Confidence: {confidence:.2%})")
+        logger.info(f"📊 Decision: {action} {symbol} (Confidence: {confidence_pct:.1f}%)")
     
     def log_order_execution(self, symbol: str, side: str, size: float, 
-                           price: Optional[float] = None, order_id: Optional[str] = None) -> None:
+                           price: Optional[float] = None, order_id: Optional[str] = None,
+                           ai_reasoning: Optional[str] = None, confidence: Optional[float] = None) -> None:
         """
         Log order execution
         
@@ -128,6 +136,8 @@ class AITradingLogger:
             size: Order size
             price: Execution price (if known)
             order_id: Order ID (if available)
+            ai_reasoning: AI reasoning for the trade (optional)
+            confidence: AI confidence level (optional)
         """
         log_entry = {
             "type": "ORDER_EXECUTION",
@@ -138,6 +148,16 @@ class AITradingLogger:
             "price": price,
             "order_id": order_id
         }
+        
+        # Add AI fields if provided
+        if ai_reasoning:
+            log_entry["ai_reasoning"] = ai_reasoning
+        if confidence is not None:
+            # Normalize confidence to 0-100 range if it's between 0-1
+            if confidence <= 1.0:
+                log_entry["confidence"] = confidence * 100
+            else:
+                log_entry["confidence"] = confidence
         
         self._write_json_log(log_entry)
         logger.info(f"✅ Order Executed: {side} {size} {symbol} @ {price}")
