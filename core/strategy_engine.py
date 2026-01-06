@@ -378,8 +378,7 @@ Be concise. Protect capital. Execute only high-probability setups."""
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=500,
-                response_format={"type": "json_object"} if self.provider != "deepseek" else None
+                max_tokens=500
             )
             
             latency_ms = (time.time() - start_time) * 1000
@@ -411,7 +410,17 @@ Be concise. Protect capital. Execute only high-probability setups."""
             logger.info(f"🤖 {self.provider.upper()} call ({model}): {latency_ms:.0f}ms, {usage.prompt_tokens} in + {usage.completion_tokens} out tokens, ${call_cost:.4f}")
             
             content = response.choices[0].message.content
-            parsed = json.loads(content)
+            
+            # Extract JSON from response (handle both plain JSON and markdown-wrapped)
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                # Try to extract JSON from markdown code blocks
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(content)
             
             # Normalize confidence to 0-1 if it's 0-100
             if 'confidence' in parsed and parsed['confidence'] > 1.0:

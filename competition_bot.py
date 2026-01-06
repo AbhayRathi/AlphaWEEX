@@ -172,9 +172,16 @@ class CompetitionTradingBot:
             balance_data = self.client.get_account_balance()
             if balance_data:
                 # Extract total equity from balance data
-                equity = float(balance_data.get('totalEquity', 0)) or float(balance_data.get('equity', 0)) or 1000.0
-                return equity
-            return 1000.0  # Default fallback
+                # Check totalEquity first, then equity, handling 0.0 as valid
+                total_equity = balance_data.get('totalEquity')
+                if total_equity is not None:
+                    return float(total_equity)
+                
+                equity = balance_data.get('equity')
+                if equity is not None:
+                    return float(equity)
+            
+            return 1000.0  # Default fallback only if no data
         except Exception as e:
             logger.error(f"Failed to get equity: {str(e)}")
             return 1000.0

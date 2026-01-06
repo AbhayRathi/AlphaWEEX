@@ -127,7 +127,8 @@ class AITradingLogger:
         self._write_json_log(log_entry)
         self.last_heartbeat_time = current_time
         
-        logger.info(f"💓 HEARTBEAT: {sentiment} | Equity: ${current_equity:.2f} | Psychology: {behavioral_state}")
+        equity_str = f"${current_equity:.2f}" if current_equity is not None else "N/A"
+        logger.info(f"💓 HEARTBEAT: {sentiment} | Equity: {equity_str} | Psychology: {behavioral_state}")
         return True
     
     def log_trade_decision(self, symbol: str, action: str, reason: str, 
@@ -353,4 +354,5 @@ class AITradingLogger:
         }
         
         self._write_json_log(log_entry)
-        logger.info(f"💓 FORCED HEARTBEAT: {sentiment} | Equity: ${current_equity:.2f} | Psychology: {behavioral_state}")
+        equity_str = f"${current_equity:.2f}" if current_equity is not None else "N/A"
+        logger.info(f"💓 FORCED HEARTBEAT: {sentiment} | Equity: {equity_str} | Psychology: {behavioral_state}")

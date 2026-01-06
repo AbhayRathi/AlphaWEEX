@@ -89,14 +89,17 @@ def test_log_rotation():
     try:
         log_file = "test_rotation.log"
         
-        # Write data to exceed 50MB
-        with open(log_file, 'w') as f:
-            # Write 51MB of data
-            for _ in range(51 * 1024):  # 51MB in 1KB chunks
-                f.write('x' * 1024)
+        # Create a sparse file that appears to be 51MB but doesn't consume disk space
+        with open(log_file, 'wb') as f:
+            # Write 1KB at start
+            f.write(b'x' * 1024)
+            # Seek to 51MB position
+            f.seek(51 * 1024 * 1024 - 1)
+            # Write 1 byte at end
+            f.write(b'\0')
         
         file_size_mb = Path(log_file).stat().st_size / 1024 / 1024
-        print(f"📦 Created test log file: {file_size_mb:.1f}MB")
+        print(f"📦 Created test log file: {file_size_mb:.1f}MB (sparse)")
         
         # Create logger - rotation happens on init
         logger = AITradingLogger(log_file)
@@ -113,9 +116,9 @@ def test_log_rotation():
         old_log = f"{log_file}.old"
         if Path(old_log).exists():
             old_size = Path(old_log).stat().st_size / 1024 / 1024
-            new_size = Path(log_file).stat().st_size / 1024 / 1024
+            new_size = Path(log_file).stat().st_size / 1024 / 1024 if Path(log_file).exists() else 0
             print(f"✅ PASSED: Log rotated to .old file ({old_size:.1f}MB)")
-            print(f"   New log file size: {new_size:.1f}MB")
+            print(f"   New log file size: {new_size:.3f}MB")
             success = True
         else:
             print("❌ FAILED: Log not rotated")
