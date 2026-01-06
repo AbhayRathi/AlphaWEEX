@@ -39,9 +39,10 @@ API_SECRET = os.getenv('API_SECRET') or os.getenv('WEEX_API_SECRET')
 API_PASSWORD = os.getenv('API_PASSWORD') or os.getenv('WEEX_API_PASSWORD')
 
 # LLM Configuration
-LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # 'openai' or 'anthropic'
-LLM_API_KEY = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # 'openai', 'anthropic', or 'deepseek'
+LLM_API_KEY = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY') or os.getenv('DEEPSEEK_API_KEY')
 LLM_MODEL = os.getenv('LLM_MODEL')  # Optional: override default model
+LLM_BASE_URL = os.getenv('LLM_BASE_URL')  # For DeepSeek: https://api.deepseek.com
 
 # Multi-Symbol Support
 SYMBOL_LIST = ["cmt_btcusdt", "cmt_ethusdt", "cmt_solusdt"]
@@ -49,6 +50,8 @@ SYMBOL_LIST = ["cmt_btcusdt", "cmt_ethusdt", "cmt_solusdt"]
 # Risk Management
 TAKE_PROFIT_PCT = 2.0  # 2% TP
 STOP_LOSS_PCT = 1.0    # 1% SL
+EQUITY_SIZING_PCT = 10.0  # 10% of equity per trade
+KILL_SWITCH_PCT = 10.0  # Kill switch if equity drops >10% in 24h
 
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
@@ -61,7 +64,10 @@ class CompetitionTradingBot:
     
     Features:
     - Multi-symbol trading
-    - LLM-based autonomous decision making
+    - LLM-based autonomous decision making (OpenAI/Anthropic/DeepSeek)
+    - Behavioral psychology integration (FOMO, Panic, Revenge, Liquidity Hunter)
+    - 10% equity sizing with kill switch
+    - Spread guard (reject if spread > 0.1%)
     - TP/SL risk management
     - Enhanced AI logging with reasoning
     - SQLite trade history persistence
@@ -91,6 +97,7 @@ class CompetitionTradingBot:
         # Initialize strategy engine (LLM or fallback)
         self.use_llm = use_llm
         self.strategy_engine = None
+        self.behavioral_adversary = None
         
         if use_llm:
             if not LLM_API_KEY:
@@ -98,16 +105,34 @@ class CompetitionTradingBot:
                 self.use_llm = False
             else:
                 try:
+                    # Initialize BehavioralAdversary first
+                    from agents.adversary import BehavioralAdversary
+                    deepseek_key = os.getenv('DEEPSEEK_API_KEY')
+                    if deepseek_key:
+                        self.behavioral_adversary = BehavioralAdversary(
+                            deepseek_api_key=deepseek_key,
+                            use_shadow_mode=False
+                        )
+                        logger.info("✅ BehavioralAdversary enabled")
+                    
+                    # Initialize StrategyEngine with behavioral adversary
                     self.strategy_engine = StrategyEngine(
                         provider=LLM_PROVIDER,
                         api_key=LLM_API_KEY,
-                        model=LLM_MODEL
+                        model=LLM_MODEL,
+                        base_url=LLM_BASE_URL,
+                        behavioral_adversary=self.behavioral_adversary
                     )
                     logger.info(f"✅ LLM Strategy Engine enabled: {LLM_PROVIDER}")
                 except Exception as e:
                     logger.error(f"Failed to initialize LLM: {str(e)}")
                     logger.warning("⚠️ Falling back to RSI/SMA strategy")
                     self.use_llm = False
+        
+        # Kill Switch state
+        self.emergency_stop = False
+        self.initial_equity = None
+        self.equity_history = []  # Track equity over time
         
         # Running flag
         self.running = False
@@ -117,6 +142,8 @@ class CompetitionTradingBot:
         logger.info("=" * 60)
         logger.info(f"📊 Multi-Symbol Support: {', '.join(SYMBOL_LIST)}")
         logger.info(f"🎯 Risk Management: TP={TAKE_PROFIT_PCT}%, SL={STOP_LOSS_PCT}%")
+        logger.info(f"💰 Equity Sizing: {EQUITY_SIZING_PCT}% per trade")
+        logger.info(f"🛑 Kill Switch: {KILL_SWITCH_PCT}% drawdown limit")
         logger.info("=" * 60)
     
     def initialize_leverage(self) -> None:
@@ -133,6 +160,164 @@ class CompetitionTradingBot:
                 logger.warning(f"⚠️ Failed to set leverage for {symbol} (continuing anyway)")
         
         logger.info("✅ Leverage initialization complete")
+    
+    def get_current_equity(self) -> float:
+        """
+        Get current account equity in USDT
+        
+        Returns:
+            Current equity
+        """
+        try:
+            balance_data = self.client.get_account_balance()
+            if balance_data:
+                # Extract total equity from balance data
+                # Check totalEquity first, then equity, handling 0.0 as valid
+                total_equity = balance_data.get('totalEquity')
+                if total_equity is not None:
+                    return float(total_equity)
+                
+                equity = balance_data.get('equity')
+                if equity is not None:
+                    return float(equity)
+            
+            return 1000.0  # Default fallback only if no data
+        except Exception as e:
+            logger.error(f"Failed to get equity: {str(e)}")
+            return 1000.0
+    
+    def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20) -> float:
+        """
+        Calculate position size using 10% equity sizing
+        Formula: qty = (Account_Balance * 0.10 * Leverage) / Current_Price
+        
+        Args:
+            symbol: Trading symbol
+            current_price: Current market price
+            leverage: Trading leverage
+            
+        Returns:
+            Position size rounded to correct precision
+        """
+        try:
+            equity = self.get_current_equity()
+            
+            # Calculate position size
+            qty = (equity * (EQUITY_SIZING_PCT / 100.0) * leverage) / current_price
+            
+            # Round to correct precision
+            qty = self.client.round_qty(symbol, qty)
+            
+            logger.info(f"💰 Position size for {symbol}: {qty} (Equity: ${equity:.2f}, Price: ${current_price:.2f})")
+            return qty
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate position size: {str(e)}")
+            return POSITION_SIZE  # Fallback to default
+    
+    def check_kill_switch(self) -> bool:
+        """
+        Check if kill switch should be activated
+        Kill switch activates if equity drops >10% in rolling 24-hour window
+        
+        Returns:
+            True if kill switch activated, False otherwise
+        """
+        if self.emergency_stop:
+            return True
+        
+        try:
+            current_equity = self.get_current_equity()
+            
+            # Initialize baseline equity if first check
+            if self.initial_equity is None:
+                self.initial_equity = current_equity
+                logger.info(f"📊 Initial equity baseline: ${self.initial_equity:.2f}")
+                return False
+            
+            # Track equity history with timestamps
+            from datetime import datetime, timedelta
+            current_time = datetime.now()
+            self.equity_history.append((current_time, current_equity))
+            
+            # Keep only last 24 hours of data
+            cutoff_time = current_time - timedelta(hours=24)
+            self.equity_history = [(t, e) for t, e in self.equity_history if t > cutoff_time]
+            
+            # Find highest equity in last 24 hours
+            if len(self.equity_history) > 0:
+                max_equity_24h = max(e for _, e in self.equity_history)
+            else:
+                max_equity_24h = self.initial_equity
+            
+            # Calculate drawdown from 24h high
+            drawdown_pct = ((current_equity - max_equity_24h) / max_equity_24h) * 100
+            
+            # Activate kill switch if drawdown exceeds threshold
+            if drawdown_pct < -KILL_SWITCH_PCT:
+                logger.error(f"🚨 KILL SWITCH ACTIVATED! Drawdown: {drawdown_pct:.2f}% (Threshold: -{KILL_SWITCH_PCT}%)")
+                logger.error(f"💰 Current: ${current_equity:.2f}, 24h High: ${max_equity_24h:.2f}")
+                self.emergency_stop = True
+                
+                # Close all positions
+                self.close_all_positions()
+                
+                # Log to AI logger
+                self.ai_logger.log_error(
+                    error_type="KILL_SWITCH",
+                    error_message=f"Equity dropped {drawdown_pct:.2f}% in 24h",
+                    context={"current_equity": current_equity, "max_equity_24h": max_equity_24h}
+                )
+                
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Kill switch check failed: {str(e)}")
+            return False
+    
+    def close_all_positions(self) -> None:
+        """
+        Emergency: Close all open positions
+        """
+        logger.warning("🛑 Closing all positions...")
+        for symbol in SYMBOL_LIST:
+            try:
+                if self.client.has_open_position(symbol):
+                    self.client.close_position(symbol)
+                    logger.info(f"✅ Closed position for {symbol}")
+            except Exception as e:
+                logger.error(f"Failed to close position for {symbol}: {str(e)}")
+    
+    def get_behavioral_tag(self, klines: List[List]) -> str:
+        """
+        Get behavioral psychology tag from BehavioralAdversary
+        
+        Args:
+            klines: Market K-lines data
+            
+        Returns:
+            Behavioral tag string
+        """
+        if not self.behavioral_adversary or not klines:
+            return "NEUTRAL"
+        
+        try:
+            current_price = float(klines[-1][4])
+            market_data = {
+                'price': current_price,
+                'rsi': self.calculate_rsi([float(k[4]) for k in klines]),
+                'volume': float(klines[-1][5]) if len(klines[-1]) > 5 else 0.0,
+                'price_change_pct': ((float(klines[-1][4]) - float(klines[0][4])) / float(klines[0][4]) * 100) if len(klines) > 1 else 0.0
+            }
+            
+            psychology = self.behavioral_adversary.analyze_psychology(market_data)
+            return psychology.get('detected_archetype', 'NEUTRAL')
+            
+        except Exception as e:
+            logger.warning(f"Failed to get behavioral tag: {str(e)}")
+            return "NEUTRAL"
     
     def calculate_rsi(self, closes: List[float], period: int = 14) -> float:
         """
@@ -412,6 +597,11 @@ class CompetitionTradingBot:
             symbol: Trading symbol to process
         """
         try:
+            # Check kill switch first
+            if self.check_kill_switch():
+                logger.error("🚨 EMERGENCY_STOP mode active - no trading")
+                return
+            
             # 1. Get K-lines data
             klines = self.client.get_market_klines(symbol, interval='1m', limit=100)
             
@@ -422,10 +612,13 @@ class CompetitionTradingBot:
             # 2. Get current price for context
             current_price = float(klines[-1][4])
             
-            # 3. Generate signal (LLM or RSI/SMA)
+            # 3. Get behavioral tag
+            behavioral_tag = self.get_behavioral_tag(klines)
+            
+            # 4. Generate signal (LLM or RSI/SMA)
             signal = self.generate_signal(klines, symbol)
             
-            # 4. Log decision with AI reasoning
+            # 5. Log decision with AI reasoning
             indicators = self.analyze_market(klines) if not self.use_llm else {"current_price": current_price}
             self.ai_logger.log_trade_decision(
                 symbol=symbol,
@@ -435,33 +628,39 @@ class CompetitionTradingBot:
                 indicators=indicators
             )
             
-            # 5. Execute trade if confidence is high enough
+            # 6. Execute trade if confidence is high enough
             if signal["action"] == "BUY" and signal["confidence"] >= 0.65:
                 # Safety Guardrail: Check if position already exists
                 if self.client.has_open_position(symbol):
                     logger.info(f"⚠️ Position already exists for {symbol}, skipping BUY")
                     return
                 
+                # Calculate position size dynamically
+                position_size = self.calculate_position_size(symbol, current_price)
+                
                 # Place BUY order
                 logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
                 
-                order = self.client.place_market_order(symbol, "BUY", POSITION_SIZE)
+                order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True)
                 
                 if order:
-                    # Record trade entry in database
+                    # Record trade entry in database with new fields
                     self.db.record_trade_entry(
                         symbol=symbol,
                         side="BUY",
                         price=current_price,
-                        size=POSITION_SIZE,
+                        size=position_size,
                         reasoning=signal["reason"],
-                        confidence=signal["confidence"]
+                        confidence=signal["confidence"],
+                        ai_reasoning=signal["reason"],
+                        behavioral_tag=behavioral_tag,
+                        confidence_score=signal["confidence"]
                     )
                     
                     self.ai_logger.log_order_execution(
                         symbol=symbol,
                         side="BUY",
-                        size=POSITION_SIZE,
+                        size=position_size,
                         price=current_price,
                         order_id=order.get('orderId')
                     )
@@ -485,15 +684,18 @@ class CompetitionTradingBot:
                 success = self.client.close_position(symbol)
                 
                 if success:
+                    position_size = abs(float(position.get('size', 0)))
                     self.ai_logger.log_order_execution(
                         symbol=symbol,
                         side="SELL",
-                        size=POSITION_SIZE,
+                        size=position_size,
                         price=current_price,
                         order_id=None
                     )
             
-            # 6. Heartbeat logging (10-minute intervals) with AI reasoning
+            # 7. Heartbeat logging (10-minute intervals) with enhanced data
+            current_equity = self.get_current_equity()
+            
             if self.use_llm and signal.get("reason"):
                 # Use LLM reasoning as sentiment
                 sentiment = f"AI: {signal['reason'][:150]}..."
@@ -508,7 +710,9 @@ class CompetitionTradingBot:
                     "action": signal["action"],
                     "confidence": signal["confidence"]
                 },
-                sentiment=sentiment
+                sentiment=sentiment,
+                current_equity=current_equity,
+                behavioral_state=behavioral_tag
             )
         
         except Exception as e:

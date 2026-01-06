@@ -57,6 +57,9 @@ class DatabaseManager:
                     exit_timestamp TEXT DEFAULT NULL,
                     reasoning TEXT DEFAULT NULL,
                     confidence REAL DEFAULT NULL,
+                    ai_reasoning TEXT DEFAULT NULL,
+                    behavioral_tag TEXT DEFAULT NULL,
+                    confidence_score REAL DEFAULT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -72,6 +75,22 @@ class DatabaseManager:
                 ON trades(symbol)
             """)
             
+            # Add new columns if they don't exist (for migration from old schema)
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN ai_reasoning TEXT DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN behavioral_tag TEXT DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            
+            try:
+                cursor.execute("ALTER TABLE trades ADD COLUMN confidence_score REAL DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            
             self.conn.commit()
             logger.info("Database schema initialized successfully")
             
@@ -81,7 +100,10 @@ class DatabaseManager:
     
     def record_trade_entry(self, symbol: str, side: str, price: float, 
                           size: float, reasoning: Optional[str] = None,
-                          confidence: Optional[float] = None) -> int:
+                          confidence: Optional[float] = None,
+                          ai_reasoning: Optional[str] = None,
+                          behavioral_tag: Optional[str] = None,
+                          confidence_score: Optional[float] = None) -> int:
         """
         Record a trade entry (BUY/SELL opened)
         
@@ -90,8 +112,11 @@ class DatabaseManager:
             side: Trade side (BUY/SELL/LONG/SHORT)
             price: Entry price
             size: Position size
-            reasoning: AI reasoning for the trade
-            confidence: Confidence level (0.0 to 1.0)
+            reasoning: AI reasoning for the trade (legacy)
+            confidence: Confidence level (0.0 to 1.0) (legacy)
+            ai_reasoning: Detailed AI reasoning
+            behavioral_tag: Behavioral psychology tag (FOMO, Panic, etc.)
+            confidence_score: Confidence score (0.0 to 1.0)
             
         Returns:
             Trade ID
@@ -101,9 +126,11 @@ class DatabaseManager:
             
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT INTO trades (timestamp, symbol, side, price, size, reasoning, confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (timestamp, symbol, side, price, size, reasoning, confidence))
+                INSERT INTO trades (timestamp, symbol, side, price, size, reasoning, confidence,
+                                  ai_reasoning, behavioral_tag, confidence_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (timestamp, symbol, side, price, size, reasoning, confidence,
+                  ai_reasoning, behavioral_tag, confidence_score))
             
             self.conn.commit()
             trade_id = cursor.lastrowid

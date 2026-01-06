@@ -36,9 +36,13 @@ class AITradingLogger:
         self.log_file = log_file
         self.last_heartbeat_time = time.time()
         self.heartbeat_interval = 600  # 10 minutes in seconds
+        self.max_log_size = 50 * 1024 * 1024  # 50MB
         
         # Ensure log file exists
         Path(self.log_file).touch(exist_ok=True)
+        
+        # Check and rotate if needed on init
+        self._check_and_rotate_log()
         
         logger.info(f"✅ AI Trading Logger initialized: {self.log_file}")
     
@@ -50,6 +54,9 @@ class AITradingLogger:
             log_data: Dictionary containing log data
         """
         try:
+            # Check and rotate if needed before writing
+            self._check_and_rotate_log()
+            
             # Add timestamp if not present
             if 'timestamp' not in log_data:
                 log_data['timestamp'] = datetime.now().isoformat()
@@ -61,13 +68,42 @@ class AITradingLogger:
         except Exception as e:
             logger.error(f"Failed to write AI log: {str(e)}")
     
-    def log_heartbeat(self, market_data: Dict[str, Any], sentiment: str) -> bool:
+    def _check_and_rotate_log(self) -> None:
+        """
+        Check log file size and rotate if necessary
+        If log file exceeds 50MB, rename to .old and start fresh
+        """
+        try:
+            log_path = Path(self.log_file)
+            if log_path.exists() and log_path.stat().st_size > self.max_log_size:
+                old_log = f"{self.log_file}.old"
+                file_size_mb = log_path.stat().st_size / 1024 / 1024
+                
+                # Remove old backup if exists
+                if Path(old_log).exists():
+                    Path(old_log).unlink()
+                
+                # Rename current log to .old
+                log_path.rename(old_log)
+                
+                logger.info(f"📦 Log rotated: {self.log_file} -> {old_log} (size: {file_size_mb:.1f}MB)")
+                
+                # Create new log file
+                log_path.touch()
+        except Exception as e:
+            logger.error(f"Failed to rotate log: {str(e)}")
+    
+    def log_heartbeat(self, market_data: Dict[str, Any], sentiment: str,
+                     current_equity: Optional[float] = None,
+                     behavioral_state: Optional[str] = None) -> bool:
         """
         Log 10-minute heartbeat with AI Market Sentiment
         
         Args:
             market_data: Current market data (price, RSI, etc.)
             sentiment: AI sentiment analysis (e.g., "RSI is 50, Neutral stance")
+            current_equity: Current total equity in USDT
+            behavioral_state: Predominant market psychology detected
             
         Returns:
             True if heartbeat was logged, False if skipped
@@ -82,6 +118,8 @@ class AITradingLogger:
             "type": "HEARTBEAT",
             "timestamp": datetime.now().isoformat(),
             "market_sentiment": sentiment,
+            "current_equity": current_equity,
+            "behavioral_state": behavioral_state or "UNKNOWN",
             "market_data": market_data,
             "interval_seconds": self.heartbeat_interval
         }
@@ -89,7 +127,8 @@ class AITradingLogger:
         self._write_json_log(log_entry)
         self.last_heartbeat_time = current_time
         
-        logger.info(f"💓 HEARTBEAT: {sentiment}")
+        equity_str = f"${current_equity:.2f}" if current_equity is not None else "N/A"
+        logger.info(f"💓 HEARTBEAT: {sentiment} | Equity: {equity_str} | Psychology: {behavioral_state}")
         return True
     
     def log_trade_decision(self, symbol: str, action: str, reason: str, 
@@ -292,21 +331,28 @@ class AITradingLogger:
             logger.error(f"Failed to get log stats: {str(e)}")
             return {}
     
-    def force_heartbeat(self, market_data: Dict[str, Any], sentiment: str) -> None:
+    def force_heartbeat(self, market_data: Dict[str, Any], sentiment: str,
+                       current_equity: Optional[float] = None,
+                       behavioral_state: Optional[str] = None) -> None:
         """
         Force a heartbeat log immediately (bypass interval check)
         
         Args:
             market_data: Current market data
             sentiment: AI sentiment analysis
+            current_equity: Current total equity in USDT
+            behavioral_state: Predominant market psychology detected
         """
         log_entry = {
             "type": "HEARTBEAT",
             "timestamp": datetime.now().isoformat(),
             "market_sentiment": sentiment,
+            "current_equity": current_equity,
+            "behavioral_state": behavioral_state or "UNKNOWN",
             "market_data": market_data,
             "forced": True
         }
         
         self._write_json_log(log_entry)
-        logger.info(f"💓 FORCED HEARTBEAT: {sentiment}")
+        equity_str = f"${current_equity:.2f}" if current_equity is not None else "N/A"
+        logger.info(f"💓 FORCED HEARTBEAT: {sentiment} | Equity: {equity_str} | Psychology: {behavioral_state}")
