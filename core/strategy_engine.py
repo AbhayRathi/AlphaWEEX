@@ -118,18 +118,22 @@ class StrategyEngine:
     - Circuit breaker for failure protection
     """
     
-    def __init__(self, provider: Literal["openai", "anthropic"] = "openai",
-                 api_key: Optional[str] = None, model: Optional[str] = None):
+    def __init__(self, provider: Literal["openai", "anthropic", "deepseek"] = "openai",
+                 api_key: Optional[str] = None, model: Optional[str] = None,
+                 base_url: Optional[str] = None, behavioral_adversary=None):
         """
         Initialize Strategy Engine
         
         Args:
-            provider: LLM provider ("openai" or "anthropic")
+            provider: LLM provider ("openai", "anthropic", or "deepseek")
             api_key: API key for the LLM provider
             model: Model name (optional, uses defaults)
+            base_url: Base URL for API (required for DeepSeek)
+            behavioral_adversary: Optional BehavioralAdversary instance for psychology tags
         """
         self.provider = provider
         self.api_key = api_key
+        self.behavioral_adversary = behavioral_adversary
         
         # Set default models
         if model:
@@ -138,11 +142,13 @@ class StrategyEngine:
             self.model = "gpt-4o-mini"  # Cost-effective and fast
         elif provider == "anthropic":
             self.model = "claude-3-5-sonnet-20241022"
+        elif provider == "deepseek":
+            self.model = "deepseek-reasoner"  # For trading decisions
         else:
             self.model = None
         
         # Validate provider availability
-        if provider == "openai" and not OPENAI_AVAILABLE:
+        if provider in ["openai", "deepseek"] and not OPENAI_AVAILABLE:
             raise ImportError("OpenAI not installed. Install with: pip install openai")
         if provider == "anthropic" and not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic not installed. Install with: pip install anthropic")
@@ -153,6 +159,10 @@ class StrategyEngine:
         # Initialize client
         if provider == "openai":
             self.client = openai.OpenAI(api_key=api_key)
+        elif provider == "deepseek":
+            # DeepSeek uses OpenAI SDK with custom base_url
+            self.base_url = base_url or "https://api.deepseek.com"
+            self.client = openai.OpenAI(api_key=api_key, base_url=self.base_url)
         elif provider == "anthropic":
             self.client = anthropic.Anthropic(api_key=api_key)
         
@@ -164,6 +174,9 @@ class StrategyEngine:
         self.total_output_tokens = 0
         self.total_calls = 0
         self.total_cost_usd = 0.0
+        
+        # Heartbeat model for DeepSeek (use deepseek-chat for lighter queries)
+        self.heartbeat_model = "deepseek-chat" if provider == "deepseek" else self.model
         
         logger.info(f"✅ StrategyEngine initialized: {provider} ({self.model})")
     
@@ -251,9 +264,9 @@ Recent Trades:
     
     def _build_prompt(self, symbol: str, klines: List[List], 
                      performance: Dict[str, Any], balance: float = 1000.0,
-                     leverage: int = 20) -> str:
+                     leverage: int = 20, current_price: float = 0.0) -> str:
         """
-        Build the complete prompt for LLM
+        Build the complete prompt for LLM (Aether-Evo Engine format)
         
         Args:
             symbol: Trading symbol
@@ -261,6 +274,7 @@ Recent Trades:
             performance: Recent performance metrics
             balance: Current balance in USDT
             leverage: Trading leverage
+            current_price: Current market price
             
         Returns:
             Complete prompt string
@@ -268,67 +282,104 @@ Recent Trades:
         candles_data = self._format_candles_data(klines)
         trade_history = self._format_trade_history(performance)
         
-        prompt = f"""You are an expert cryptocurrency trader managing a futures trading account with {leverage}x leverage.
+        # Get behavioral psychology tags from BehavioralAdversary if available
+        behavioral_tags = "No behavioral analysis available"
+        if self.behavioral_adversary:
+            try:
+                market_data = {
+                    'price': current_price,
+                    'rsi': self._calculate_rsi_from_klines(klines),
+                    'volume': float(klines[-1][5]) if klines and len(klines[-1]) > 5 else 0.0,
+                    'price_change_pct': ((float(klines[-1][4]) - float(klines[0][4])) / float(klines[0][4]) * 100) if klines and len(klines) > 1 else 0.0
+                }
+                psychology = self.behavioral_adversary.analyze_psychology(market_data)
+                behavioral_tags = f"{psychology.get('detected_archetype', 'NEUTRAL')} (Confidence: {psychology.get('confidence', 0.5):.2%}, Signal: {psychology.get('signal', 'HOLD')})"
+            except Exception as e:
+                logger.warning(f"Failed to get behavioral tags: {str(e)}")
+        
+        # Aether-Evo Engine prompt format
+        prompt = f"""You are the Aether-Evo Engine. An elite AI trading system with access to market data, behavioral psychology, and performance history.
 
-CURRENT SITUATION:
+DATA:
 - Symbol: {symbol}
 - Balance: ${balance:.2f} USDT
 - Leverage: {leverage}x
 - Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
+[100m Candles]:
 {candles_data}
 
+[Psychology]: {behavioral_tags}
+
+[Past Perf]:
 {trade_history}
 
 TASK:
-Based on the market data and our trading history, make a decision: should we BUY, SELL, or HOLD?
+Analyze the data and make a trading decision. Consider:
+1. Market momentum and price action patterns
+2. Behavioral psychology (FOMO, Panic, Revenge, Liquidity Hunter)
+3. Our trading history (learn from successes and failures)
+4. Risk management with {leverage}x leverage
 
-IMPORTANT RULES:
-1. We use {leverage}x leverage, so risk is amplified
-2. Consider market momentum, volume, and price action
-3. Use our trading history to learn from past successes and failures
-4. Protect our ${balance:.2f} USDT balance
-5. Be conservative - it's better to HOLD than to make a bad trade
-
-RESPONSE FORMAT:
-You must respond with valid JSON in this exact format:
+RESPONSE FORMAT (JSON only):
 {{
-    "action": "BUY" or "SELL" or "HOLD",
-    "confidence": 0.0 to 1.0,
-    "reasoning": "Your detailed explanation of why you chose this action. Explain what you see in the market data, how our past performance influences this decision, and why this is the best move to protect and grow our balance."
+    "action": "BUY" | "SELL" | "HOLD",
+    "confidence": 0-100,
+    "reasoning": "Max 20 words explaining the decision"
 }}
 
-Your reasoning should be clear and explain:
-- What patterns you see in the price action
-- How volume and momentum support your decision
-- What you learned from our recent trade history
-- Why this protects or grows our {balance} USDT balance
-
-Respond only with the JSON object, no additional text."""
+Be concise. Protect capital. Execute only high-probability setups."""
         
         return prompt
     
-    def _call_openai(self, prompt: str) -> Dict[str, Any]:
+    def _calculate_rsi_from_klines(self, klines: List[List], period: int = 14) -> float:
+        """Calculate RSI from klines data"""
+        if not klines or len(klines) < period + 1:
+            return 50.0
+        
+        closes = [float(candle[4]) for candle in klines]
+        deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+        gains = [d if d > 0 else 0 for d in deltas]
+        losses = [-d if d < 0 else 0 for d in deltas]
+        
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    
+    def _call_openai(self, prompt: str, use_reasoner: bool = True) -> Dict[str, Any]:
         """
-        Call OpenAI API with token tracking
+        Call OpenAI/DeepSeek API with token tracking
         
         Args:
             prompt: Prompt text
+            use_reasoner: Use deepseek-reasoner model (only for DeepSeek)
             
         Returns:
             Parsed response dictionary
         """
         try:
             start_time = time.time()
+            
+            # Select model based on provider and context
+            model = self.model
+            if self.provider == "deepseek" and not use_reasoner:
+                model = self.heartbeat_model
+            
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=model,
                 messages=[
-                    {"role": "system", "content": "You are an expert cryptocurrency trader. Always respond with valid JSON."},
+                    {"role": "system", "content": "You are the Aether-Evo Engine, an expert cryptocurrency trader. Always respond with valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
                 max_tokens=500,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"} if self.provider != "deepseek" else None
             )
             
             latency_ms = (time.time() - start_time) * 1000
@@ -339,19 +390,37 @@ Respond only with the JSON object, no additional text."""
             self.total_output_tokens += usage.completion_tokens
             self.total_calls += 1
             
-            # Estimate cost (GPT-4o-mini pricing: $0.15/1M input, $0.60/1M output)
-            input_cost = (usage.prompt_tokens / 1_000_000) * 0.15
-            output_cost = (usage.completion_tokens / 1_000_000) * 0.60
+            # Estimate cost based on provider
+            if self.provider == "deepseek":
+                # DeepSeek pricing: $0.27/1M input, $1.10/1M output for reasoner
+                # DeepSeek-chat: $0.14/1M input, $0.28/1M output
+                if model == "deepseek-reasoner":
+                    input_cost = (usage.prompt_tokens / 1_000_000) * 0.27
+                    output_cost = (usage.completion_tokens / 1_000_000) * 1.10
+                else:
+                    input_cost = (usage.prompt_tokens / 1_000_000) * 0.14
+                    output_cost = (usage.completion_tokens / 1_000_000) * 0.28
+            else:
+                # GPT-4o-mini pricing: $0.15/1M input, $0.60/1M output
+                input_cost = (usage.prompt_tokens / 1_000_000) * 0.15
+                output_cost = (usage.completion_tokens / 1_000_000) * 0.60
+            
             call_cost = input_cost + output_cost
             self.total_cost_usd += call_cost
             
-            logger.info(f"🤖 OpenAI call: {latency_ms:.0f}ms, {usage.prompt_tokens} in + {usage.completion_tokens} out tokens, ${call_cost:.4f}")
+            logger.info(f"🤖 {self.provider.upper()} call ({model}): {latency_ms:.0f}ms, {usage.prompt_tokens} in + {usage.completion_tokens} out tokens, ${call_cost:.4f}")
             
             content = response.choices[0].message.content
-            return json.loads(content)
+            parsed = json.loads(content)
+            
+            # Normalize confidence to 0-1 if it's 0-100
+            if 'confidence' in parsed and parsed['confidence'] > 1.0:
+                parsed['confidence'] = parsed['confidence'] / 100.0
+            
+            return parsed
             
         except Exception as e:
-            logger.error(f"OpenAI API error: {str(e)}")
+            logger.error(f"{self.provider.upper()} API error: {str(e)}")
             raise
     
     def _call_anthropic(self, prompt: str) -> Dict[str, Any]:
@@ -426,13 +495,16 @@ Respond only with the JSON object, no additional text."""
             - reasoning: Detailed explanation from LLM
         """
         try:
+            # Get current price from klines
+            current_price = float(klines[-1][4]) if klines and len(klines) > 0 else 0.0
+            
             # Build prompt
-            prompt = self._build_prompt(symbol, klines, performance, balance, leverage)
+            prompt = self._build_prompt(symbol, klines, performance, balance, leverage, current_price)
             
             # Call LLM with circuit breaker protection
             def _make_llm_call():
-                if self.provider == "openai":
-                    return self._call_openai(prompt)
+                if self.provider in ["openai", "deepseek"]:
+                    return self._call_openai(prompt, use_reasoner=True)
                 elif self.provider == "anthropic":
                     return self._call_anthropic(prompt)
                 else:
@@ -495,3 +567,42 @@ Respond only with the JSON object, no additional text."""
             "circuit_breaker_state": self.circuit_breaker.state,
             "circuit_breaker_failures": self.circuit_breaker.failures
         }
+    
+    def generate_heartbeat_sentiment(self, symbol: str, klines: List[List], 
+                                     current_equity: float) -> str:
+        """
+        Generate market sentiment for heartbeat logging using lighter model
+        
+        Args:
+            symbol: Trading symbol
+            klines: Market K-lines data
+            current_equity: Current total equity in USDT
+            
+        Returns:
+            Market sentiment string
+        """
+        try:
+            if not klines or len(klines) == 0:
+                return "No market data available"
+            
+            current_price = float(klines[-1][4])
+            
+            # Use DeepSeek-chat for heartbeat (lighter/cheaper)
+            if self.provider == "deepseek":
+                prompt = f"""Brief market analysis for {symbol} at ${current_price:.2f}. 
+Total equity: ${current_equity:.2f}. 
+Recent candles: {len(klines)} data points.
+Provide 1 sentence market view."""
+                
+                try:
+                    response = self._call_openai(prompt, use_reasoner=False)
+                    return response.get("reasoning", f"Monitoring {symbol} at ${current_price:.2f}")
+                except:
+                    pass
+            
+            # Fallback to simple description
+            return f"{symbol} at ${current_price:.2f}, Equity: ${current_equity:.2f}"
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate heartbeat sentiment: {str(e)}")
+            return f"Monitoring {symbol}"

@@ -50,6 +50,27 @@ class WEEXv2Client:
         
         # Track open positions for TP/SL management
         self.open_positions: Dict[str, Dict[str, Any]] = {}
+        
+        # Precision settings for different symbols
+        self.precision_map = {
+            "cmt_btcusdt": 4,  # BTC: 4 decimals
+            "cmt_ethusdt": 3,  # ETH: 3 decimals
+            "cmt_solusdt": 2,  # SOL: 2 decimals
+        }
+    
+    def round_qty(self, symbol: str, qty: float) -> float:
+        """
+        Round quantity to the correct precision for the symbol
+        
+        Args:
+            symbol: Trading symbol
+            qty: Quantity to round
+            
+        Returns:
+            Rounded quantity
+        """
+        precision = self.precision_map.get(symbol, 2)  # Default to 2 decimals
+        return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                           query_string: str, body_str: str) -> str:
@@ -168,6 +189,117 @@ class WEEXv2Client:
             logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
             return []
     
+    def get_order_book(self, symbol: str, depth: int = 5) -> Optional[Dict[str, Any]]:
+        """
+        Get order book (market depth) from WEEX
+        Endpoint: GET /capi/v2/market/depth
+        
+        Args:
+            symbol: Trading symbol (e.g., "cmt_btcusdt")
+            depth: Order book depth (default: 5)
+            
+        Returns:
+            Dictionary with bids and asks, or None if failed
+        """
+        try:
+            import urllib.parse
+            path = "/capi/v2/market/depth"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&depth={depth}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0 or data.get('success'):
+                    order_book = data.get('data', {})
+                    logger.debug(f"✅ Retrieved order book for {symbol}")
+                    return order_book
+                else:
+                    logger.error(f"❌ Order book error: {data.get('message', 'Unknown error')}")
+                    return None
+            else:
+                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get order book for {symbol}: {str(e)}")
+            return None
+    
+    def check_spread(self, symbol: str, max_spread_pct: float = 0.1) -> bool:
+        """
+        Check if spread is acceptable (Spread Guard)
+        
+        Args:
+            symbol: Trading symbol
+            max_spread_pct: Maximum acceptable spread in percentage (default: 0.1%)
+            
+        Returns:
+            True if spread is acceptable, False otherwise
+        """
+        try:
+            order_book = self.get_order_book(symbol, depth=1)
+            
+            if not order_book:
+                logger.warning(f"⚠️ Could not fetch order book for {symbol}, skipping spread check")
+                return True  # Allow trade if we can't check (failsafe)
+            
+            bids = order_book.get('bids', [])
+            asks = order_book.get('asks', [])
+            
+            if not bids or not asks:
+                logger.warning(f"⚠️ Empty order book for {symbol}")
+                return False
+            
+            # Get best bid and ask
+            best_bid = float(bids[0][0]) if isinstance(bids[0], list) else float(bids[0].get('price', 0))
+            best_ask = float(asks[0][0]) if isinstance(asks[0], list) else float(asks[0].get('price', 0))
+            
+            if best_bid == 0:
+                return False
+            
+            # Calculate spread percentage
+            spread_pct = ((best_ask - best_bid) / best_bid) * 100
+            
+            if spread_pct > max_spread_pct:
+                logger.warning(f"🛑 Spread too wide for {symbol}: {spread_pct:.3f}% > {max_spread_pct}%")
+                return False
+            
+            logger.debug(f"✅ Spread OK for {symbol}: {spread_pct:.3f}%")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to check spread for {symbol}: {str(e)}")
+            return True  # Allow trade on error (failsafe)
+    
+    def get_account_balance(self) -> Optional[Dict[str, Any]]:
+        """
+        Get account balance
+        Endpoint: GET /capi/v2/account/balance
+        
+        Returns:
+            Account balance data or None if failed
+        """
+        try:
+            path = "/capi/v2/account/balance"
+            response = self.send_weex_request("GET", path)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0 or data.get('success'):
+                    balance = data.get('data', {})
+                    logger.debug(f"✅ Retrieved account balance")
+                    return balance
+                else:
+                    logger.error(f"❌ Get balance error: {data.get('message', 'Unknown error')}")
+                    return None
+            else:
+                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get account balance: {str(e)}")
+            return None
+    
     def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
@@ -254,20 +386,30 @@ class WEEXv2Client:
             logger.error(f"Failed to check position for {symbol}: {str(e)}")
             return False
     
-    def place_market_order(self, symbol: str, side: str, size: float) -> Optional[Dict[str, Any]]:
+    def place_market_order(self, symbol: str, side: str, size: float,
+                          check_spread: bool = True) -> Optional[Dict[str, Any]]:
         """
-        Place a market order
+        Place a market order with precision rounding and spread check
         Endpoint: POST /capi/v2/order/placeOrder
         
         Args:
             symbol: Trading symbol
             side: Order side ("BUY" or "SELL")
             size: Order size
+            check_spread: Whether to check spread before placing order
             
         Returns:
             Order response dict or None if failed
         """
         try:
+            # Spread guard
+            if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
+                logger.warning(f"🛑 Order rejected for {symbol} due to wide spread")
+                return None
+            
+            # Round quantity to correct precision
+            size = self.round_qty(symbol, size)
+            
             path = "/capi/v2/order/placeOrder"
             body = {
                 "symbol": symbol,
