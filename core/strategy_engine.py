@@ -180,7 +180,7 @@ Respond ONLY with valid JSON, no other text."""
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=200
+                max_tokens=300  # Increased for more detailed reasoning
             )
             
             # Extract response
@@ -198,7 +198,7 @@ Respond ONLY with valid JSON, no other text."""
                         if line.strip().startswith("```"):
                             in_block = not in_block
                             continue
-                        if in_block or not line.strip().startswith("```"):
+                        if in_block:
                             json_lines.append(line)
                     content = "\n".join(json_lines).strip()
                 
