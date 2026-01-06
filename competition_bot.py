@@ -85,8 +85,16 @@ class CompetitionTradingBot:
         self.use_llm = USE_LLM_STRATEGY
         if self.use_llm:
             try:
-                self.llm_strategy = LLMStrategy()
-                logger.info("🧠 LLM Strategy enabled")
+                # Check if API key exists before initializing
+                api_key = os.getenv('OPENAI_API_KEY')
+                if not api_key:
+                    logger.warning("⚠️ OPENAI_API_KEY not set - cannot use LLM strategy")
+                    logger.info("📊 Falling back to indicator-based strategy")
+                    self.use_llm = False
+                    self.llm_strategy = None
+                else:
+                    self.llm_strategy = LLMStrategy()
+                    logger.info("🧠 LLM Strategy enabled")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize LLM strategy: {e}")
                 logger.warning("⚠️ Falling back to indicator-based strategy")
