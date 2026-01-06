@@ -77,6 +77,7 @@ class AITradingLogger:
             log_path = Path(self.log_file)
             if log_path.exists() and log_path.stat().st_size > self.max_log_size:
                 old_log = f"{self.log_file}.old"
+                file_size_mb = log_path.stat().st_size / 1024 / 1024
                 
                 # Remove old backup if exists
                 if Path(old_log).exists():
@@ -85,7 +86,7 @@ class AITradingLogger:
                 # Rename current log to .old
                 log_path.rename(old_log)
                 
-                logger.info(f"📦 Log rotated: {self.log_file} -> {old_log} (size: {log_path.stat().st_size / 1024 / 1024:.1f}MB)")
+                logger.info(f"📦 Log rotated: {self.log_file} -> {old_log} (size: {file_size_mb:.1f}MB)")
                 
                 # Create new log file
                 log_path.touch()
