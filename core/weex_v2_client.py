@@ -171,7 +171,7 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/setLeverage
+        Endpoint: POST /capi/v2/account/leverage
         
         Args:
             symbol: Trading symbol
