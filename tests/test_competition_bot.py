@@ -118,6 +118,91 @@ class TestWEEXv2Client:
         neutral_price = 2985  # 0.5% below entry
         trigger = client.check_tp_sl_triggers(symbol, neutral_price)
         assert trigger is None
+    
+    @patch('core.weex_v2_client.requests.post')
+    def test_set_leverage_endpoint(self, mock_post):
+        """Test leverage endpoint uses correct path and body format"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'code': 0, 'success': True}
+        mock_post.return_value = mock_response
+        
+        # Call set_leverage
+        result = client.set_leverage("cmt_btcusdt", 10)
+        
+        # Verify result
+        assert result is True
+        
+        # Verify the endpoint was called with correct parameters
+        assert mock_post.called
+        call_args = mock_post.call_args
+        
+        # Check URL contains correct path
+        assert "/capi/v2/account/leverage" in call_args[0][0]
+        
+        # Check body contains marginMode and leverage as string
+        body_data = json.loads(call_args[1]['data'])
+        assert body_data['symbol'] == "cmt_btcusdt"
+        assert body_data['marginMode'] == "crossed"
+        assert body_data['leverage'] == "10"
+        assert isinstance(body_data['leverage'], str)
+    
+    @patch('core.weex_v2_client.requests.post')
+    def test_set_leverage_already_set_handling(self, mock_post):
+        """Test 'already set' message is handled as success"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock response with "already set" message
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'code': 1,
+            'message': 'Leverage already set to 10x',
+            'success': False
+        }
+        mock_post.return_value = mock_response
+        
+        # Call set_leverage
+        result = client.set_leverage("cmt_btcusdt", 10)
+        
+        # Should return True (success) for "already set" message
+        assert result is True
+    
+    @patch('core.weex_v2_client.requests.get')
+    def test_get_klines_granularity_parameter(self, mock_get):
+        """Test candles endpoint uses 'granularity' parameter instead of 'interval'"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'code': 0,
+            'success': True,
+            'data': [
+                [1234567890, '50000', '51000', '49000', '50500', '100'],
+                [1234567900, '50500', '51500', '50000', '51000', '150']
+            ]
+        }
+        mock_get.return_value = mock_response
+        
+        # Call get_market_klines
+        klines = client.get_market_klines("cmt_btcusdt", "1m", limit=2)
+        
+        # Verify result
+        assert len(klines) == 2
+        
+        # Verify the endpoint was called with 'granularity' parameter
+        assert mock_get.called
+        call_args = mock_get.call_args
+        url = call_args[0][0]
+        
+        # Check URL contains 'granularity' not 'interval'
+        assert "granularity=1m" in url
+        assert "interval=" not in url
 
 
 class TestAITradingLogger:
