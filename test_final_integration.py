@@ -27,6 +27,11 @@ from core.weex_v2_client import WEEXv2Client
 from agents.adversary import BehavioralAdversary
 
 
+# Test constants
+TEST_LOG_SIZE_MB = 51  # Size of test log file in MB
+TEST_LOG_SIZE_BYTES = TEST_LOG_SIZE_MB * 1024 * 1024
+
+
 def test_database_schema():
     """Test that database has new columns"""
     print("\n" + "="*60)
@@ -93,8 +98,8 @@ def test_log_rotation():
         with open(log_file, 'wb') as f:
             # Write 1KB at start
             f.write(b'x' * 1024)
-            # Seek to 51MB position
-            f.seek(51 * 1024 * 1024 - 1)
+            # Seek to test size position
+            f.seek(TEST_LOG_SIZE_BYTES - 1)
             # Write 1 byte at end
             f.write(b'\0')
         

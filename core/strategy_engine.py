@@ -6,6 +6,7 @@ Replaces traditional RSI/SMA rules with AI reasoning using OpenAI or Anthropic.
 import json
 import logging
 import time
+import re
 from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime
 
@@ -25,6 +26,13 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     logger.warning("Anthropic not available. Install with: pip install anthropic")
+
+# Type hint for BehavioralAdversary (to avoid circular import)
+try:
+    from agents.adversary import BehavioralAdversary
+    BehavioralAdversaryType = BehavioralAdversary
+except ImportError:
+    BehavioralAdversaryType = Any  # Fallback if import fails
 
 
 class LLMCircuitBreaker:
@@ -120,7 +128,8 @@ class StrategyEngine:
     
     def __init__(self, provider: Literal["openai", "anthropic", "deepseek"] = "openai",
                  api_key: Optional[str] = None, model: Optional[str] = None,
-                 base_url: Optional[str] = None, behavioral_adversary=None):
+                 base_url: Optional[str] = None, 
+                 behavioral_adversary: Optional[BehavioralAdversaryType] = None):
         """
         Initialize Strategy Engine
         
@@ -415,11 +424,15 @@ Be concise. Protect capital. Execute only high-probability setups."""
             try:
                 parsed = json.loads(content)
             except json.JSONDecodeError:
-                # Try to extract JSON from markdown code blocks
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
+                # Try to extract JSON from markdown code blocks using regex
+                match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
+                if match:
+                    content = match.group(1).strip()
+                else:
+                    # Fallback: try to find JSON object
+                    match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if match:
+                        content = match.group(0)
                 parsed = json.loads(content)
             
             # Normalize confidence to 0-1 if it's 0-100

@@ -225,6 +225,25 @@ class WEEXv2Client:
             logger.error(f"Failed to get order book for {symbol}: {str(e)}")
             return None
     
+    def _extract_price_from_order(self, order: Any) -> float:
+        """
+        Extract price from order book entry (handles both list and dict formats)
+        
+        Args:
+            order: Order entry (either [price, size] or {"price": x, "size": y})
+            
+        Returns:
+            Price as float, or 0.0 if extraction fails
+        """
+        try:
+            if isinstance(order, list):
+                return float(order[0])
+            elif isinstance(order, dict):
+                return float(order.get('price', 0))
+            return 0.0
+        except (ValueError, TypeError, IndexError):
+            return 0.0
+    
     def check_spread(self, symbol: str, max_spread_pct: float = 0.1) -> bool:
         """
         Check if spread is acceptable (Spread Guard)
@@ -250,9 +269,9 @@ class WEEXv2Client:
                 logger.warning(f"⚠️ Empty order book for {symbol}")
                 return False
             
-            # Get best bid and ask
-            best_bid = float(bids[0][0]) if isinstance(bids[0], list) else float(bids[0].get('price', 0))
-            best_ask = float(asks[0][0]) if isinstance(asks[0], list) else float(asks[0].get('price', 0))
+            # Get best bid and ask using helper method
+            best_bid = self._extract_price_from_order(bids[0])
+            best_ask = self._extract_price_from_order(asks[0])
             
             if best_bid == 0:
                 return False
