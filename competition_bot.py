@@ -1,5 +1,5 @@
 """
-WEEX AI Trading Bot - Competition-Ready Implementation
+WEEX AI Trading Bot - Competition-Ready Implementation with LLM Brain
 
 Requirements:
 1. Working Auth - WEEX v2 API with proper signature
@@ -8,6 +8,8 @@ Requirements:
 4. Risk Management - 2% TP, 1% SL
 5. Enhanced AI Logging - JSON format with 10-min heartbeat
 6. Safety Guardrails - 20x leverage, position check, 521 cooldown
+7. LLM-Based Strategy - Autonomous AI decision making
+8. Persistent Memory - SQLite database for learning
 """
 import os
 import time
@@ -18,6 +20,8 @@ from dotenv import load_dotenv
 
 from core.weex_v2_client import WEEXv2Client
 from core.ai_logger import AITradingLogger
+from core.db import DatabaseManager
+from core.strategy_engine import LLMStrategy
 
 # Load environment variables
 load_dotenv()
@@ -45,14 +49,18 @@ STOP_LOSS_PCT = 1.0    # 1% SL
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
 MAIN_LOOP_INTERVAL = 30  # Check every 30 seconds
 
+# LLM Strategy Toggle (set to False to use traditional indicators)
+USE_LLM_STRATEGY = os.getenv('USE_LLM_STRATEGY', 'true').lower() == 'true'
+
 
 class CompetitionTradingBot:
     """
-    Competition-Ready WEEX AI Trading Bot
+    Competition-Ready WEEX AI Trading Bot with LLM Brain
     
     Features:
     - Multi-symbol trading
-    - K-lines based decision engine
+    - LLM-based decision engine with fallback to indicators
+    - Persistent memory with SQLite
     - TP/SL risk management
     - Enhanced AI logging
     - Safety guardrails
@@ -70,6 +78,24 @@ class CompetitionTradingBot:
         # Initialize AI logger
         self.ai_logger = AITradingLogger("ai_trading.log")
         
+        # Initialize database for persistent memory
+        self.db = DatabaseManager("data/trading_memory.db")
+        
+        # Initialize LLM strategy (if enabled)
+        self.use_llm = USE_LLM_STRATEGY
+        if self.use_llm:
+            try:
+                self.llm_strategy = LLMStrategy()
+                logger.info("🧠 LLM Strategy enabled")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to initialize LLM strategy: {e}")
+                logger.warning("⚠️ Falling back to indicator-based strategy")
+                self.use_llm = False
+                self.llm_strategy = None
+        else:
+            self.llm_strategy = None
+            logger.info("📊 Using traditional indicator-based strategy")
+        
         # Running flag
         self.running = False
         
@@ -78,6 +104,7 @@ class CompetitionTradingBot:
         logger.info("=" * 60)
         logger.info(f"📊 Multi-Symbol Support: {', '.join(SYMBOL_LIST)}")
         logger.info(f"🎯 Risk Management: TP={TAKE_PROFIT_PCT}%, SL={STOP_LOSS_PCT}%")
+        logger.info(f"🧠 Strategy: {'LLM-Based' if self.use_llm else 'Indicator-Based'}")
         logger.info("=" * 60)
     
     def initialize_leverage(self) -> None:
@@ -193,22 +220,49 @@ class CompetitionTradingBot:
             "avg_volume": avg_volume
         }
     
-    def generate_signal(self, indicators: Dict[str, Any], symbol: str) -> Dict[str, Any]:
+    def generate_signal(self, klines: List[List], symbol: str, 
+                       indicators: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Generate trading signal based on indicators (Simple Decision Engine)
+        Generate trading signal using LLM or fallback to indicators
         
         Args:
-            indicators: Market indicators
+            klines: K-lines data
             symbol: Trading symbol
+            indicators: Market indicators (optional, for fallback)
             
         Returns:
             Signal dictionary with action, confidence, and reason
         """
-        if not indicators.get("valid"):
+        # Try LLM strategy first if enabled
+        if self.use_llm and self.llm_strategy:
+            try:
+                # Get recent performance from database
+                past_trades = self.db.get_recent_performance(limit=5)
+                
+                # Generate signal using LLM
+                signal = self.llm_strategy.generate_signal(symbol, klines, past_trades)
+                
+                # Normalize confidence to 0-1 range for backward compatibility
+                if signal.get('confidence', 0) > 1:
+                    signal['confidence_pct'] = signal['confidence']
+                    signal['confidence'] = signal['confidence'] / 100.0
+                else:
+                    signal['confidence_pct'] = signal['confidence'] * 100
+                
+                return signal
+                
+            except Exception as e:
+                logger.warning(f"⚠️ LLM strategy failed for {symbol}: {e}")
+                logger.info(f"ℹ️ Falling back to indicator-based strategy")
+        
+        # Fallback to indicator-based strategy
+        if not indicators or not indicators.get("valid"):
             return {
                 "action": "HOLD",
                 "confidence": 0.0,
-                "reason": indicators.get("reason", "Invalid data")
+                "confidence_pct": 0.0,
+                "reason": "Invalid data",
+                "executable": False
             }
         
         rsi = indicators["rsi"]
@@ -252,23 +306,40 @@ class CompetitionTradingBot:
             confidence = 0.60
             reason = "Golden cross with price above SMA20"
         
+        confidence_pct = confidence * 100
+        executable = (action in ['BUY', 'SELL']) and (confidence >= 0.65)
+        
         return {
             "action": action,
             "confidence": confidence,
-            "reason": reason
+            "confidence_pct": confidence_pct,
+            "reason": reason,
+            "executable": executable
         }
     
-    def generate_sentiment(self, indicators: Dict[str, Any]) -> str:
+    def generate_sentiment(self, klines: List[List], 
+                          indicators: Optional[Dict[str, Any]] = None) -> str:
         """
         Generate AI Market Sentiment for heartbeat logging
         
         Args:
-            indicators: Market indicators
+            klines: K-lines data
+            indicators: Market indicators (optional)
             
         Returns:
             Sentiment string (e.g., "RSI is 50, Neutral stance")
         """
-        if not indicators.get("valid"):
+        # Try LLM sentiment if enabled
+        if self.use_llm and self.llm_strategy:
+            try:
+                past_trades = self.db.get_recent_performance(limit=5)
+                sentiment = self.llm_strategy.get_market_sentiment(klines, past_trades)
+                return sentiment
+            except Exception as e:
+                logger.warning(f"⚠️ LLM sentiment failed: {e}")
+        
+        # Fallback to indicator-based sentiment
+        if not indicators or not indicators.get("valid"):
             return "No market data available"
         
         rsi = indicators["rsi"]
@@ -315,6 +386,16 @@ class CompetitionTradingBot:
                     # Log trigger
                     self.ai_logger.log_tp_sl_trigger(symbol, trigger, entry_price, current_price, pnl_pct)
                     
+                    # Record in database
+                    self.db.record_trade(
+                        symbol=symbol,
+                        side="CLOSE",
+                        price=current_price,
+                        pnl=pnl_pct,
+                        reasoning=f"{trigger} triggered at {pnl_pct:+.2f}%",
+                        confidence=100.0  # TP/SL are automatic
+                    )
+                    
                     # Close position
                     success = self.client.close_position(symbol)
                     
@@ -345,34 +426,45 @@ class CompetitionTradingBot:
                 logger.debug(f"No data for {symbol}, skipping...")
                 return
             
-            # 2. Analyze market
+            # 2. Analyze market (for fallback strategy)
             indicators = self.analyze_market(klines)
             
             if not indicators.get("valid"):
                 logger.debug(f"Invalid indicators for {symbol}: {indicators.get('reason')}")
                 return
             
-            # 3. Generate signal
-            signal = self.generate_signal(indicators, symbol)
+            # 3. Generate signal (uses LLM if enabled, otherwise indicators)
+            signal = self.generate_signal(klines, symbol, indicators)
             
             # 4. Log decision
+            confidence = signal.get("confidence_pct", signal.get("confidence", 0))
             self.ai_logger.log_trade_decision(
                 symbol=symbol,
                 action=signal["action"],
                 reason=signal["reason"],
-                confidence=signal["confidence"],
+                confidence=confidence,
                 indicators=indicators
             )
             
-            # 5. Execute trade if confidence is high enough
-            if signal["action"] == "BUY" and signal["confidence"] >= 0.65:
+            # 5. Execute trade if signal is executable
+            executable = signal.get("executable", False)
+            if not executable and signal["action"] in ["BUY", "SELL"]:
+                # Check using old threshold for backward compatibility
+                conf_value = signal.get("confidence", 0)
+                if conf_value <= 1.0:
+                    executable = conf_value >= 0.65
+                else:
+                    executable = conf_value >= 65
+            
+            if signal["action"] == "BUY" and executable:
                 # Safety Guardrail: Check if position already exists
                 if self.client.has_open_position(symbol):
                     logger.info(f"⚠️ Position already exists for {symbol}, skipping BUY")
                     return
                 
                 # Place BUY order
-                logger.info(f"🟢 BUY signal for {symbol}: {signal['reason']} (Confidence: {signal['confidence']:.2%})")
+                conf_display = signal.get("confidence_pct", signal.get("confidence") * 100)
+                logger.info(f"🟢 BUY signal for {symbol}: {signal['reason']} (Confidence: {conf_display:.1f}%)")
                 
                 order = self.client.place_market_order(symbol, "BUY", POSITION_SIZE)
                 
@@ -382,16 +474,35 @@ class CompetitionTradingBot:
                         side="BUY",
                         size=POSITION_SIZE,
                         price=indicators["current_price"],
-                        order_id=order.get('orderId')
+                        order_id=order.get('orderId'),
+                        ai_reasoning=signal["reason"],
+                        confidence=confidence
+                    )
+                    
+                    # Record in database
+                    self.db.record_trade(
+                        symbol=symbol,
+                        side="BUY",
+                        price=indicators["current_price"],
+                        pnl=0.0,  # PnL calculated on close
+                        reasoning=signal["reason"],
+                        confidence=confidence
                     )
             
-            elif signal["action"] == "SELL" and signal["confidence"] >= 0.65:
+            elif signal["action"] == "SELL" and executable:
                 # Only SELL if we have a position
                 if not self.client.has_open_position(symbol):
                     logger.debug(f"No position to sell for {symbol}")
                     return
                 
-                logger.info(f"🔴 SELL signal for {symbol}: {signal['reason']} (Confidence: {signal['confidence']:.2%})")
+                conf_display = signal.get("confidence_pct", signal.get("confidence") * 100)
+                logger.info(f"🔴 SELL signal for {symbol}: {signal['reason']} (Confidence: {conf_display:.1f}%)")
+                
+                # Get position for PnL calculation
+                position = self.client.open_positions.get(symbol, {})
+                entry_price = float(position.get('entryPrice', 0))
+                current_price = indicators["current_price"]
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
                 
                 success = self.client.close_position(symbol)
                 
@@ -400,12 +511,24 @@ class CompetitionTradingBot:
                         symbol=symbol,
                         side="SELL",
                         size=POSITION_SIZE,
-                        price=indicators["current_price"],
-                        order_id=None
+                        price=current_price,
+                        order_id=None,
+                        ai_reasoning=signal["reason"],
+                        confidence=confidence
+                    )
+                    
+                    # Record in database
+                    self.db.record_trade(
+                        symbol=symbol,
+                        side="SELL",
+                        price=current_price,
+                        pnl=pnl_pct,
+                        reasoning=signal["reason"],
+                        confidence=confidence
                     )
             
             # 6. Heartbeat logging (10-minute intervals)
-            sentiment = self.generate_sentiment(indicators)
+            sentiment = self.generate_sentiment(klines, indicators)
             self.ai_logger.log_heartbeat(
                 market_data={
                     "symbol": symbol,
