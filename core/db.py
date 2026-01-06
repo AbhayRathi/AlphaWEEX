@@ -249,7 +249,9 @@ class DatabaseManager:
             
             if updates:
                 updates.append('updated_at = CURRENT_TIMESTAMP')
-                sql = f"UPDATE bot_state SET {', '.join(updates)} WHERE id = 1"
+                # Safe: updates list contains only predefined column names, not user input
+                # All values are parameterized via params list
+                sql = f"UPDATE bot_state SET {', '.join(updates)} WHERE id = 1"  # nosec B608
                 cursor.execute(sql, params)
                 conn.commit()
             
