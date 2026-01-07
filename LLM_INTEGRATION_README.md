@@ -22,8 +22,8 @@ The bot now uses AI (Large Language Models) to make trading decisions instead of
 │   (LLM)      │    │  (SQLite)    │    │     (JSON)      │
 └──────────────┘    └──────────────┘    └─────────────────┘
         │                    │
-        │ OpenAI/Anthropic   │ Trade History
-        │                    │
+        │ DeepSeek/OpenAI/   │ Trade History
+        │   Anthropic        │
         ▼                    ▼
    LLM Decision      Performance Memory
    (BUY/SELL/HOLD)   (Win Rate, P&L)
@@ -80,21 +80,26 @@ performance = db.get_recent_performance(limit=20)
 **Purpose**: LLM-powered trading decision engine.
 
 **Key Features**:
-- Supports OpenAI (GPT-4) and Anthropic (Claude)
+- Supports DeepSeek (recommended), OpenAI (GPT-4), and Anthropic (Claude)
+- Auto-detects provider from environment variables
 - Formats market data (last 100 candles) into readable prompts
 - Includes trade history in context for learning
 - Requests structured JSON responses
 - Validates and sanitizes LLM output
+- Uses optimized models: deepseek-reasoner for decisions, deepseek-chat for heartbeat
 
 **API**:
 ```python
 from core.strategy_engine import StrategyEngine
 
-# Initialize with OpenAI
+# Auto-detect provider from environment (priority: DeepSeek > OpenAI > Anthropic)
+engine = StrategyEngine()  # Will use DEEPSEEK_API_KEY if available
+
+# Or explicitly specify provider
 engine = StrategyEngine(
-    provider="openai",
-    api_key=os.getenv("OPENAI_API_KEY"),
-    model="gpt-4o-mini"  # optional
+    provider="deepseek",  # or "openai" or "anthropic"
+    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    model="deepseek-reasoner"  # optional
 )
 
 # Get trading decision
@@ -175,13 +180,16 @@ API_KEY=your_weex_api_key
 API_SECRET=your_weex_api_secret
 API_PASSWORD=your_weex_api_password
 
-# LLM Configuration
-LLM_PROVIDER=openai  # or 'anthropic'
-OPENAI_API_KEY=sk-...  # Your OpenAI API key
+# LLM Configuration (auto-detects provider, priority: DeepSeek > OpenAI > Anthropic)
+DEEPSEEK_API_KEY=sk-...  # Recommended: DeepSeek API key (most cost-effective)
+# OPENAI_API_KEY=sk-...  # Alternative: OpenAI API key
 # ANTHROPIC_API_KEY=sk-ant-...  # Alternative: Anthropic API key
 
+# Optional: Force specific provider
+# LLM_PROVIDER=deepseek  # or 'openai' or 'anthropic'
+
 # Optional: Override default model
-# LLM_MODEL=gpt-4o-mini  # or claude-3-5-sonnet-20241022
+# LLM_MODEL=deepseek-reasoner  # or gpt-4o-mini or claude-3-5-sonnet-20241022
 ```
 
 ### 3. Run the Bot
