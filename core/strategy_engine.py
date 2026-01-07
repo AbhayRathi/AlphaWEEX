@@ -5,6 +5,7 @@ Supports multiple LLM providers: DeepSeek, OpenAI, and Anthropic.
 """
 import json
 import logging
+import os
 import time
 import re
 from typing import Dict, Any, List, Optional, Literal
@@ -136,36 +137,39 @@ class StrategyEngine:
         
         Args:
             provider: LLM provider ("openai", "anthropic", or "deepseek"). If None, auto-detects from environment.
-            api_key: API key for the LLM provider. If None, auto-detects from environment.
+            api_key: API key for the LLM provider. If None, uses environment variable matching provider.
             model: Model name (optional, uses defaults)
-            base_url: Base URL for API (required for DeepSeek)
+            base_url: Base URL for API (optional, defaults to https://api.deepseek.com for DeepSeek)
             behavioral_adversary: Optional BehavioralAdversary instance for psychology tags
+            
+        Note:
+            Auto-detection priority (when provider=None): DeepSeek > OpenAI > Anthropic
+            When provider is specified but api_key is None, only that provider's env var is checked.
         """
-        import os
-        
-        # Auto-detect provider and API key from environment if not provided
-        if provider is None or api_key is None:
+        # Auto-detect provider from environment if not specified
+        if provider is None:
             deepseek_key = os.getenv('DEEPSEEK_API_KEY')
             openai_key = os.getenv('OPENAI_API_KEY')
             anthropic_key = os.getenv('ANTHROPIC_API_KEY')
             
             # Priority: DeepSeek > OpenAI > Anthropic
-            if deepseek_key and (provider is None or provider == "deepseek"):
+            if deepseek_key:
                 provider = "deepseek"
                 api_key = api_key or deepseek_key
-            elif openai_key and (provider is None or provider == "openai"):
+            elif openai_key:
                 provider = "openai"
                 api_key = api_key or openai_key
-            elif anthropic_key and (provider is None or provider == "anthropic"):
+            elif anthropic_key:
                 provider = "anthropic"
                 api_key = api_key or anthropic_key
+            else:
+                raise ValueError("No LLM provider specified. Set provider parameter or environment variable (DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)")
         
-        # Ensure we have a provider and API key
-        if not provider:
-            raise ValueError("No LLM provider specified. Set provider parameter or environment variable (DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)")
-        
-        if not api_key:
-            raise ValueError(f"No LLM API key found for {provider}. Set {provider.upper()}_API_KEY environment variable or pass api_key parameter.")
+        # If provider is specified but api_key is not, get it from environment
+        if api_key is None:
+            api_key = os.getenv(f'{provider.upper()}_API_KEY')
+            if not api_key:
+                raise ValueError(f"No LLM API key found for {provider}. Set {provider.upper()}_API_KEY environment variable or pass api_key parameter.")
         
         self.provider = provider
         self.api_key = api_key
