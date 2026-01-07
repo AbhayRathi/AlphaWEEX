@@ -3,6 +3,7 @@ LLM-Based Strategy Engine for Autonomous Trading Decisions
 
 Supports multiple LLM providers: DeepSeek, OpenAI, and Anthropic.
 """
+from dotenv import load_dotenv
 import json
 import logging
 import os
@@ -10,6 +11,11 @@ import time
 import re
 from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime
+
+# Inside the StrategyEngine class:
+def __init__(self, provider=None, api_key=None):
+    load_dotenv()  # <--- ADD THIS HERE
+    # ... (rest of the detection logic)
 
 logger = logging.getLogger(__name__)
 
