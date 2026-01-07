@@ -229,7 +229,7 @@ class TestStrategyEngine:
     
     def test_strategy_engine_initialization_no_key(self):
         """Test initialization fails without API key"""
-        with pytest.raises(ValueError, match="API key required"):
+        with pytest.raises(ValueError, match="No LLM"):
             StrategyEngine(provider="openai", api_key=None)
     
     @patch('core.strategy_engine.OPENAI_AVAILABLE', True)

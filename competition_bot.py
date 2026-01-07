@@ -39,8 +39,9 @@ API_SECRET = os.getenv('API_SECRET') or os.getenv('WEEX_API_SECRET')
 API_PASSWORD = os.getenv('API_PASSWORD') or os.getenv('WEEX_API_PASSWORD')
 
 # LLM Configuration
-LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'openai')  # 'openai', 'anthropic', or 'deepseek'
-LLM_API_KEY = os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY') or os.getenv('DEEPSEEK_API_KEY')
+# Priority: DeepSeek > OpenAI > Anthropic (auto-detected in StrategyEngine)
+LLM_PROVIDER = os.getenv('LLM_PROVIDER')  # Optional: 'openai', 'anthropic', or 'deepseek'
+LLM_API_KEY = os.getenv('DEEPSEEK_API_KEY') or os.getenv('OPENAI_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
 LLM_MODEL = os.getenv('LLM_MODEL')  # Optional: override default model
 LLM_BASE_URL = os.getenv('LLM_BASE_URL')  # For DeepSeek: https://api.deepseek.com
 
@@ -101,7 +102,7 @@ class CompetitionTradingBot:
         
         if use_llm:
             if not LLM_API_KEY:
-                logger.warning("⚠️ No LLM API key found. Falling back to RSI/SMA strategy.")
+                logger.warning("⚠️ No LLM API key found (DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY). Falling back to RSI/SMA strategy.")
                 self.use_llm = False
             else:
                 try:
@@ -115,15 +116,16 @@ class CompetitionTradingBot:
                         )
                         logger.info("✅ BehavioralAdversary enabled")
                     
-                    # Initialize StrategyEngine with behavioral adversary
+                    # Initialize StrategyEngine with auto-detection (pass None to use env vars)
+                    # StrategyEngine will auto-detect provider from environment if not specified
                     self.strategy_engine = StrategyEngine(
-                        provider=LLM_PROVIDER,
-                        api_key=LLM_API_KEY,
+                        provider=LLM_PROVIDER,  # None means auto-detect
+                        api_key=LLM_API_KEY,  # None means auto-detect
                         model=LLM_MODEL,
                         base_url=LLM_BASE_URL,
                         behavioral_adversary=self.behavioral_adversary
                     )
-                    logger.info(f"✅ LLM Strategy Engine enabled: {LLM_PROVIDER}")
+                    logger.info(f"✅ LLM Strategy Engine enabled: {self.strategy_engine.provider}")
                 except Exception as e:
                     logger.error(f"Failed to initialize LLM: {str(e)}")
                     logger.warning("⚠️ Falling back to RSI/SMA strategy")

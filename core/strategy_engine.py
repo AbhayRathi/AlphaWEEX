@@ -1,10 +1,11 @@
 """
 LLM-Based Strategy Engine for Autonomous Trading Decisions
 
-Replaces traditional RSI/SMA rules with AI reasoning using OpenAI or Anthropic.
+Supports multiple LLM providers: DeepSeek, OpenAI, and Anthropic.
 """
 import json
 import logging
+import os
 import time
 import re
 from typing import Dict, Any, List, Optional, Literal
@@ -117,6 +118,7 @@ class StrategyEngine:
     LLM-powered trading strategy engine
     
     Features:
+    - DeepSeek integration (recommended for cost-effectiveness)
     - OpenAI GPT-4 integration
     - Anthropic Claude integration
     - Context-aware prompting with market data
@@ -126,7 +128,7 @@ class StrategyEngine:
     - Circuit breaker for failure protection
     """
     
-    def __init__(self, provider: Literal["openai", "anthropic", "deepseek"] = "openai",
+    def __init__(self, provider: Optional[Literal["openai", "anthropic", "deepseek"]] = None,
                  api_key: Optional[str] = None, model: Optional[str] = None,
                  base_url: Optional[str] = None, 
                  behavioral_adversary: Optional[BehavioralAdversaryType] = None):
@@ -134,12 +136,40 @@ class StrategyEngine:
         Initialize Strategy Engine
         
         Args:
-            provider: LLM provider ("openai", "anthropic", or "deepseek")
-            api_key: API key for the LLM provider
+            provider: LLM provider ("openai", "anthropic", or "deepseek"). If None, auto-detects from environment.
+            api_key: API key for the LLM provider. If None, uses environment variable matching provider.
             model: Model name (optional, uses defaults)
-            base_url: Base URL for API (required for DeepSeek)
+            base_url: Base URL for API (optional, defaults to https://api.deepseek.com for DeepSeek)
             behavioral_adversary: Optional BehavioralAdversary instance for psychology tags
+            
+        Note:
+            Auto-detection priority (when provider=None): DeepSeek > OpenAI > Anthropic
+            When provider is specified but api_key is None, only that provider's env var is checked.
         """
+        # Auto-detect provider from environment if not specified
+        if provider is None:
+            # Check providers in priority order: DeepSeek > OpenAI > Anthropic
+            provider_priority = [
+                ("deepseek", os.getenv('DEEPSEEK_API_KEY')),
+                ("openai", os.getenv('OPENAI_API_KEY')),
+                ("anthropic", os.getenv('ANTHROPIC_API_KEY'))
+            ]
+            
+            for prov_name, prov_key in provider_priority:
+                if prov_key:
+                    provider = prov_name
+                    api_key = api_key or prov_key
+                    break
+            else:
+                raise ValueError("No LLM provider specified. Set provider parameter or environment variable (DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)")
+        
+        # If provider is specified but api_key is not, get it from environment
+        if api_key is None:
+            if provider:  # Defensive check
+                api_key = os.getenv(f'{provider.upper()}_API_KEY')
+            if not api_key:
+                raise ValueError(f"No LLM API key found for {provider}. Set {provider.upper()}_API_KEY environment variable or pass api_key parameter.")
+        
         self.provider = provider
         self.api_key = api_key
         self.behavioral_adversary = behavioral_adversary
@@ -161,9 +191,6 @@ class StrategyEngine:
             raise ImportError("OpenAI not installed. Install with: pip install openai")
         if provider == "anthropic" and not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic not installed. Install with: pip install anthropic")
-        
-        if not api_key:
-            raise ValueError(f"API key required for {provider}")
         
         # Initialize client
         if provider == "openai":
