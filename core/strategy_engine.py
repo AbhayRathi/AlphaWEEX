@@ -148,26 +148,25 @@ class StrategyEngine:
         """
         # Auto-detect provider from environment if not specified
         if provider is None:
-            deepseek_key = os.getenv('DEEPSEEK_API_KEY')
-            openai_key = os.getenv('OPENAI_API_KEY')
-            anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+            # Check providers in priority order: DeepSeek > OpenAI > Anthropic
+            provider_priority = [
+                ("deepseek", os.getenv('DEEPSEEK_API_KEY')),
+                ("openai", os.getenv('OPENAI_API_KEY')),
+                ("anthropic", os.getenv('ANTHROPIC_API_KEY'))
+            ]
             
-            # Priority: DeepSeek > OpenAI > Anthropic
-            if deepseek_key:
-                provider = "deepseek"
-                api_key = api_key or deepseek_key
-            elif openai_key:
-                provider = "openai"
-                api_key = api_key or openai_key
-            elif anthropic_key:
-                provider = "anthropic"
-                api_key = api_key or anthropic_key
+            for prov_name, prov_key in provider_priority:
+                if prov_key:
+                    provider = prov_name
+                    api_key = api_key or prov_key
+                    break
             else:
                 raise ValueError("No LLM provider specified. Set provider parameter or environment variable (DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)")
         
         # If provider is specified but api_key is not, get it from environment
         if api_key is None:
-            api_key = os.getenv(f'{provider.upper()}_API_KEY')
+            if provider:  # Defensive check
+                api_key = os.getenv(f'{provider.upper()}_API_KEY')
             if not api_key:
                 raise ValueError(f"No LLM API key found for {provider}. Set {provider.upper()}_API_KEY environment variable or pass api_key parameter.")
         
