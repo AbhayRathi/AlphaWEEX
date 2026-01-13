@@ -648,6 +648,9 @@ Provide 1 sentence market view."""
                 
                 try:
                     response = self._call_openai(prompt, use_reasoner=False)
+                    if isinstance(response, dict) and 'market_analysis' in response:
+                        analysis = response['market_analysis']
+                        return f"Market View: {analysis.get('market_view')} | Note: {analysis.get('trading_note')}"
                     return str(response.get("response") or response.get("content") or response)
                     #return response.get("response") or response.get("content") or str(response)
                     #return str(response.get("response") or response.get("content") or response.get("message") or response)  SWITCH?
