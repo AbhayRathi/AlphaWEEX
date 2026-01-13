@@ -292,24 +292,27 @@ class WEEXv2Client:
     
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
         """
-        Get account balance
+        Get account balance for USDT-Futures (Competition Wallet)
         Endpoint: GET /capi/v2/account/accounts
-        
-        Returns:
-            Account balance data or None if failed
         """
         try:
             path = "/capi/v2/account/accounts"
-            response = self.send_weex_request("GET", path)
+            # CRITICAL: You must specify productType='umcbl' for USDT-Futures
+            params = {"productType": "umcbl"} 
+            
+            # Pass params to your request method
+            response = self.send_weex_request("GET", path, params=params)
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get('code') == 0 or data.get('success'):
+                # WEEX uses '00000' or 0 for success depending on the version
+                if data.get('code') in [0, "0", "00000"] or data.get('success'):
+                    # The balance data is usually in 'data' or 'data.list'
                     balance = data.get('data', {})
-                    logger.debug(f"✅ Retrieved account balance")
+                    logger.debug(f"✅ Retrieved USDT-Futures balance")
                     return balance
                 else:
-                    logger.error(f"❌ Get balance error: {data.get('message', 'Unknown error')}")
+                    logger.error(f"❌ WEEX API Error: {data.get('msg') or data.get('message') or 'Unknown error'}")
                     return None
             else:
                 logger.error(f"❌ HTTP {response.status_code}: {response.text}")
