@@ -648,7 +648,7 @@ Provide 1 sentence market view."""
                 
                 try:
                     response = self._call_openai(prompt, use_reasoner=False)
-                    return response.get("response") or response.get("content") or response.get("reasoning") or f"Monitoring {symbol}"
+                    return response.get("response") or response.get("content") or response.get("message") or response.get("reasoning") or f"Analysis for {symbol} at ${current_price:.2f}"
                 except Exception as e:
                     logger.debug(f"DeepSeek heartbeat call failed: {e}")
                     # We don't return here so it naturally hits the fallback below
