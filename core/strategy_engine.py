@@ -648,7 +648,8 @@ Provide 1 sentence market view."""
                 
                 try:
                     response = self._call_openai(prompt, use_reasoner=False)
-                    return response.get("response") or response.get("content") or str(response)
+                    return str(response.get("response") or response.get("content") or response)
+                    #return response.get("response") or response.get("content") or str(response)
                     #return str(response.get("response") or response.get("content") or response.get("message") or response)  SWITCH?
                     #return str(response.get("response") or response.get("content") or response.get("reasoning") or f"Analysis for {symbol} at ${current_price:.2f}")
                     #return response.get("response") or response.get("content") or response.get("message") or response.get("reasoning") or f"Analysis for {symbol} at ${current_price:.2f}"
