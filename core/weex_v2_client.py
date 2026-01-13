@@ -291,29 +291,23 @@ class WEEXv2Client:
             return True  # Allow trade on error (failsafe)
     
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
-        """
-        Get account balance for USDT-Futures
-        """
         try:
-            # We manually add the productType to the URL path
+            # Some WEEX V2 endpoints prefer the parameter in the path like this
             path = "/capi/v2/account/accounts?productType=umcbl"
-            
-            # Call your existing request method without the extra 'params' argument
             response = self.send_weex_request("GET", path)
             
             if response.status_code == 200:
                 data = response.json()
-                # Success check for WEEX V2
-                if data.get('code') in [0, "0", "00000"] or data.get('success'):
-                    balance = data.get('data', {})
-                    return balance
-                else:
-                    logger.error(f"❌ WEEX API Error: {data.get('msg') or data.get('message')}")
-                    return None
-            else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                return None
+                # Log the full data once so you can see exactly what WEEX is sending back
+                # logger.info(f"DEBUG WEEX DATA: {data}") 
                 
+                # WEEX V2 success code is often "00000" (string)
+                if data.get('code') in [0, "0", "00000", "success"]:
+                    return data.get('data', {})
+                
+                # If code is not success, let's see what the actual code was
+                logger.error(f"❌ WEEX API Error Code: {data.get('code')} - Msg: {data.get('msg')}")
+                return None
         except Exception as e:
             logger.error(f"Failed to get account balance: {str(e)}")
             return None
