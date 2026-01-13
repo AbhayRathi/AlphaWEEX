@@ -293,13 +293,13 @@ class WEEXv2Client:
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
         """
         Get account balance
-        Endpoint: GET /capi/v2/account/balance
+        Endpoint: GET /capi/v2/account/getAccounts
         
         Returns:
             Account balance data or None if failed
         """
         try:
-            path = "/capi/v2/account/balance"
+            path = "/capi/v2/account/getAccounts"
             response = self.send_weex_request("GET", path)
             
             if response.status_code == 200:

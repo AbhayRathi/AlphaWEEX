@@ -649,7 +649,7 @@ Provide 1 sentence market view."""
                 try:
                     response = self._call_openai(prompt, use_reasoner=False)
                     #return str(response.get("response") or response.get("content") or response.get("message") or response)  SWITCH?
-                    return str(response.get("response") or response.get("content") or response.get("reasoning") or f"Monitoring {symbol} at ${current_price:.2f}")
+                    return str(response.get("response") or response.get("content") or response.get("reasoning") or f"Analysis for {symbol} at ${current_price:.2f}")
                     #return response.get("response") or response.get("content") or response.get("message") or response.get("reasoning") or f"Analysis for {symbol} at ${current_price:.2f}"
                 except Exception as e:
                     logger.debug(f"DeepSeek heartbeat call failed: {e}")
