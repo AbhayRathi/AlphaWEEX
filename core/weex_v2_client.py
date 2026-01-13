@@ -292,24 +292,28 @@ class WEEXv2Client:
     
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
         try:
-            # Some WEEX V2 endpoints prefer the parameter in the path like this
+            # 1. Use the working contract path
             path = "/capi/v2/account/accounts?productType=umcbl"
             response = self.send_weex_request("GET", path)
             
             if response.status_code == 200:
                 data = response.json()
-                # Log the full data once so you can see exactly what WEEX is sending back
-                # logger.info(f"DEBUG WEEX DATA: {data}") 
                 
-                # WEEX V2 success code is often "00000" (string)
-                if data.get('code') in [0, "0", "00000", "success"]:
-                    return data.get('data', {})
+                # 2. Based on your raw log, the balance is in 'collateral'
+                collateral_list = data.get('collateral', [])
+                if collateral_list:
+                    # Find the USDT entry (coin_id: 2 is typically USDT)
+                    for item in collateral_list:
+                        if item.get('coin_id') == 2 or item.get('amount'):
+                            balance_value = item.get('amount')
+                            logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
+                            return item
                 
-                # If code is not success, let's see what the actual code was
-                logger.error(f"❌ WEEX API Error Code: {data.get('code')} - Msg: {data.get('msg')}")
-                return None
+                # Fallback if the list is empty
+                return data
+            return None
         except Exception as e:
-            logger.error(f"Failed to get account balance: {str(e)}")
+            logger.error(f"Balance parsing error: {str(e)}")
             return None
     
     def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
