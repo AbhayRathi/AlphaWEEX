@@ -455,8 +455,10 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             
             latency_ms = (time.time() - start_time) * 1000
             
-            # Reset DeepSeek reasoner failure counter on success
-            if self.provider == "deepseek" and model == "deepseek-reasoner":
+            # Reset DeepSeek reasoner failure counter on any successful call
+            if self.provider == "deepseek":
+                if self.deepseek_reasoner_failures > 0:
+                    logger.info(f"🔄 Resetting DeepSeek failure counter after successful call (was {self.deepseek_reasoner_failures})")
                 self.deepseek_reasoner_failures = 0
             
             # Track token usage
@@ -509,8 +511,8 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             return parsed
             
         except Exception as e:
-            # Track DeepSeek reasoner failures for fallback
-            if self.provider == "deepseek" and use_reasoner and self.model == "deepseek-reasoner":
+            # Track DeepSeek reasoner failures for fallback (only when actually trying to use reasoner)
+            if self.provider == "deepseek" and model == "deepseek-reasoner":
                 self.deepseek_reasoner_failures += 1
                 logger.warning(f"⚠️ DeepSeek reasoner failure {self.deepseek_reasoner_failures}/{self.deepseek_reasoner_failure_threshold}")
             
