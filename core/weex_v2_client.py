@@ -11,6 +11,7 @@ import base64
 import requests
 import json
 import logging
+import urllib.parse
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -201,7 +202,6 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or None if failed
         """
         try:
-            import urllib.parse
             path = "/capi/v2/market/funding-rate"
             query_params = f"?symbol={urllib.parse.quote(symbol)}"
             
@@ -214,8 +214,9 @@ class WEEXv2Client:
                     # Extract funding rate - try different field names
                     funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
                     if funding_rate is not None:
-                        # Convert to percentage if needed
-                        funding_rate_pct = float(funding_rate) * 100 if abs(float(funding_rate)) < 1 else float(funding_rate)
+                        # Convert to float and then to percentage if needed
+                        funding_rate_float = float(funding_rate)
+                        funding_rate_pct = funding_rate_float * 100 if abs(funding_rate_float) < 1 else funding_rate_float
                         logger.debug(f"✅ Retrieved funding rate for {symbol}: {funding_rate_pct:.4f}%")
                         return funding_rate_pct
                     else:

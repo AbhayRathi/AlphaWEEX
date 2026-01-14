@@ -25,9 +25,27 @@ class FundingRateAnalyzer:
     EXTREME_POSITIVE_THRESHOLD = 0.05  # 0.05% - market is over-leveraged long
     EXTREME_NEGATIVE_THRESHOLD = -0.05  # -0.05% - market is over-leveraged short
     
+    # Trading confidence thresholds
+    CONFIDENCE_THRESHOLD = 0.5  # Threshold for overriding actions
+    EXECUTION_THRESHOLD = 0.65  # Minimum confidence to execute trades
+    
     def __init__(self):
         """Initialize the funding rate analyzer"""
         logger.info("✅ FundingRateAnalyzer initialized")
+    
+    def _adjust_confidence(self, confidence: float, weight: float) -> float:
+        """
+        Helper method to adjust confidence with weight
+        
+        Args:
+            confidence: Original confidence (0.0-1.0)
+            weight: Weight to apply (-1.0 to 1.0)
+            
+        Returns:
+            Adjusted confidence clamped to [0.0, 1.0]
+        """
+        adjusted = confidence * (1.0 + weight)
+        return max(0.0, min(1.0, adjusted))
     
     def classify_funding_rate(self, funding_rate: float) -> Literal["EXTREME_POSITIVE", "EXTREME_NEGATIVE", "NEUTRAL"]:
         """
@@ -111,12 +129,14 @@ class FundingRateAnalyzer:
             # Restrict long trades
             if original_action == "BUY":
                 # Reduce confidence for BUY signals when funding is extreme positive
-                adjusted_confidence = original_confidence * (1.0 + funding_sentiment["weight"])
-                adjusted_signal["confidence"] = max(0.0, adjusted_confidence)
+                adjusted_signal["confidence"] = self._adjust_confidence(
+                    original_confidence, 
+                    funding_sentiment["weight"]
+                )
                 adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING ALERT: {funding_sentiment['reasoning']}"
                 
                 # If confidence drops too low, convert to HOLD
-                if adjusted_signal["confidence"] < 0.5:
+                if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
                     adjusted_signal["action"] = "HOLD"
                     adjusted_signal["reason"] += " | Overridden to HOLD due to extreme positive funding."
                 
@@ -126,8 +146,10 @@ class FundingRateAnalyzer:
             # Prioritize long trades
             if original_action == "BUY":
                 # Boost confidence for BUY signals when funding is extreme negative
-                adjusted_confidence = min(1.0, original_confidence * (1.0 + funding_sentiment["weight"]))
-                adjusted_signal["confidence"] = adjusted_confidence
+                adjusted_signal["confidence"] = self._adjust_confidence(
+                    original_confidence,
+                    funding_sentiment["weight"]
+                )
                 adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: {funding_sentiment['reasoning']}"
                 logger.info(f"🚀 Funding Rate Alert: Prioritized LONG trade (funding: {funding_rate:.3f}%)")
             
@@ -140,11 +162,10 @@ class FundingRateAnalyzer:
             
             elif original_action == "SELL":
                 # Reduce confidence for SELL signals when short-squeeze is likely
-                adjusted_confidence = original_confidence * 0.7
-                adjusted_signal["confidence"] = adjusted_confidence
+                adjusted_signal["confidence"] = original_confidence * 0.7  # 30% reduction
                 adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING WARNING: {funding_sentiment['reasoning']}"
                 
-                if adjusted_signal["confidence"] < 0.5:
+                if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
                     adjusted_signal["action"] = "HOLD"
                     adjusted_signal["reason"] += " | Overridden to HOLD due to short-squeeze risk."
         
