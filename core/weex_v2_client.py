@@ -291,30 +291,27 @@ class WEEXv2Client:
             return True  # Allow trade on error (failsafe)
     
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
-        try:
-            # 1. Use the working contract path
-            path = "/capi/v2/account/accounts?productType=umcbl"
-            response = self.send_weex_request("GET", path)
-            
-            if response.status_code == 200:
-                data = response.json()
+            try:
+                path = "/capi/v2/account/accounts?productType=umcbl"
+                response = self.send_weex_request("GET", path)
                 
-                # 2. Based on your raw log, the balance is in 'collateral'
-                collateral_list = data.get('collateral', [])
-                if collateral_list:
-                    # Find the USDT entry (coin_id: 2 is typically USDT)
-                    for item in collateral_list:
-                        if item.get('coin_id') == 2 or item.get('amount'):
-                            balance_value = item.get('amount')
-                            logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
-                            return item
-                
-                # Fallback if the list is empty
-                return data
-            return None
-        except Exception as e:
-            logger.error(f"Balance parsing error: {str(e)}")
-            return None
+                if response.status_code == 200:
+                    data = response.json()
+                    collateral_list = data.get('collateral', [])
+                    if collateral_list:
+                        for item in collateral_list:
+                            # Ensure we are looking at the USDT wallet (coin_id 2)
+                            if str(item.get('coin_id')) == "2":
+                                balance_value = item.get('amount')
+                                logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
+                                return item
+                    
+                    # If no list found, return a safe structure so .get('amount') doesn't crash
+                    return {"amount": "0.00"} 
+                return None
+            except Exception as e:
+                logger.error(f"Balance parsing error: {str(e)}")
+                return None
     
     def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
         """
