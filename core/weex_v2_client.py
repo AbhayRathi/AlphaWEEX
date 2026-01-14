@@ -152,42 +152,39 @@ class WEEXv2Client:
             raise
     
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List]:
-        """
-        Get K-lines (candlestick) data from WEEX
-        Endpoint: GET /capi/v2/market/candles
-        
-        Args:
-            symbol: Trading symbol (e.g., "cmt_btcusdt")
-            interval: Time interval (1m, 5m, 15m, 1h, etc.)
-            limit: Number of candles to retrieve (max 100)
-            
-        Returns:
-            List of candles: [[timestamp, open, high, low, close, volume], ...]
-        """
-        try:
-            import urllib.parse
-            path = "/capi/v2/market/candles"
-            # URL encode parameters
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={urllib.parse.quote(interval)}&limit={limit}"
-            
-            response = self.send_weex_request("GET", path, query_params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0 or data.get('success'):
-                    klines = data.get('data', [])
-                    logger.info(f"✅ Retrieved {len(klines)} candles for {symbol}")
-                    return klines
-                else:
-                    logger.error(f"❌ K-lines error: {data.get('message', 'Unknown error')}")
-                    return []
-            else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                return []
+            """
+            Get K-lines (candlestick) data from WEEX
+            Endpoint: GET /capi/v2/market/candles
+            """
+            try:
+                import urllib.parse
+                path = "/capi/v2/market/candles"
                 
-        except Exception as e:
-            logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
-            return []
+                # Map intervals if needed (WEEX expects 1m, 5m, etc.)
+                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+                
+                response = self.send_weex_request("GET", path, query_params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # FIX: WEEX V2 Contract API returns a list directly [[...], [...]]
+                    if isinstance(data, list):
+                        logger.info(f"✅ Retrieved {len(data)} candles for {symbol}")
+                        return data
+                    # Fallback for Spot or different formats
+                    elif isinstance(data, dict) and data.get('code') == '00000':
+                        return data.get('data', [])
+                    else:
+                        logger.error(f"❌ Unexpected response format for {symbol}: {data}")
+                        return []
+                else:
+                    logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                    return []
+                    
+            except Exception as e:
+                logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
+                return []
     
     def get_order_book(self, symbol: str, depth: int = 5) -> Optional[Dict[str, Any]]:
         """
