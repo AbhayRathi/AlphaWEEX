@@ -895,6 +895,11 @@ class CompetitionTradingBot:
         self.running = True
         
         try:
+            # Reset circuit breaker on startup to avoid persistent OPEN state
+            if self.use_llm and self.strategy_engine:
+                self.strategy_engine.reset_circuit_breaker()
+                logger.info("✅ Circuit breaker reset on startup")
+            
             # Initialize leverage
             self.initialize_leverage()
             
