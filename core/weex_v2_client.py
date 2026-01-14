@@ -190,7 +190,7 @@ class WEEXv2Client:
     def get_funding_rate(self, symbol: str) -> Optional[float]:
         """
         Get current funding rate for a symbol from WEEX
-        Endpoint: GET /capi/v2/market/public/funding-rate
+        Endpoint: GET /capi/v2/market/funding-rate?symbol={symbol}
         
         Args:
             symbol: Trading symbol (e.g., "cmt_btcusdt")
@@ -199,8 +199,8 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
-            # Updated path to correct WEEX V2 endpoint
-            path = "/capi/v2/market/public/funding-rate"
+            # Updated path to correct WEEX V2 endpoint (removed 'public')
+            path = "/capi/v2/market/funding-rate"
             query_params = f"?symbol={urllib.parse.quote(symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
@@ -385,17 +385,25 @@ class WEEXv2Client:
                 if data.get('code') == 0 or data.get('success'):
                     logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
                     return True
-                elif "already set" in str(data.get('message', '')).lower():
-                    logger.info(f"✅ Leverage already set to {leverage}x for {symbol}")
-                    return True
                 else:
-                    logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
-                    return False
+                    error_msg = str(data.get('message', 'Unknown error')).lower()
+                    # Ignore "no change needed" and similar errors (WEEX returns error when already set)
+                    if "already set" in error_msg or "no change" in error_msg or "same" in error_msg:
+                        logger.info(f"✅ Leverage already at {leverage}x for {symbol} (no change needed)")
+                        return True
+                    else:
+                        logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
+                        return False
             else:
                 logger.error(f"❌ HTTP {response.status_code}: {response.text}")
                 return False
                 
         except Exception as e:
+            # Ignore "no change needed" type errors in exception messages
+            error_str = str(e).lower()
+            if "no change" in error_str or "already set" in error_str or "same" in error_str:
+                logger.info(f"✅ Leverage already configured for {symbol} (ignoring error: {str(e)})")
+                return True
             logger.error(f"Failed to set leverage for {symbol}: {str(e)}")
             return False
     

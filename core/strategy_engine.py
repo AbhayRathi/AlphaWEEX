@@ -193,7 +193,7 @@ class StrategyEngine:
         elif provider == "anthropic":
             self.model = "claude-3-5-sonnet-20241022"
         elif provider == "deepseek":
-            self.model = "deepseek-reasoner"  # For trading decisions
+            self.model = "deepseek-chat"  # For trading decisions (more stable during peak hours)
         else:
             self.model = None
         
@@ -488,6 +488,11 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             logger.info(f"🤖 {self.provider.upper()} call ({model}): {latency_ms:.0f}ms, {usage.prompt_tokens} in + {usage.completion_tokens} out tokens, ${call_cost:.4f}")
             
             content = response.choices[0].message.content
+            
+            # CRITICAL: Check for blank/empty responses from DeepSeek during peak hours
+            if not content or content.strip() == "":
+                logger.error(f"⚠️ Blank response from {self.provider.upper()} - triggering fallback")
+                raise Exception("Empty response from LLM - cannot parse")
             
             # Extract JSON from response (handle both plain JSON and markdown-wrapped)
             try:
