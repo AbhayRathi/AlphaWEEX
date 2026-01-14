@@ -46,7 +46,17 @@ LLM_MODEL = os.getenv('LLM_MODEL')  # Optional: override default model
 LLM_BASE_URL = os.getenv('LLM_BASE_URL')  # For DeepSeek: https://api.deepseek.com
 
 # Multi-Symbol Support
-SYMBOL_LIST = ["cmt_btcusdt", "cmt_ethusdt", "cmt_solusdt"]
+# Updated Competition Symbol List (8 Pairs)
+SYMBOL_LIST = [
+    "cmt_btcusdt",   # Bitcoin
+    "cmt_ethusdt",   # Ethereum
+    "cmt_solusdt",   # Solana
+    "cmt_ltcusdt",   # Litecoin
+    "cmt_adausdt",   # Cardano
+    "cmt_dogeusdt",  # Dogecoin
+    "cmt_xrpusdt",   # XRP
+    "cmt_bnbusdt"    # Binance Coin
+]
 
 # Risk Management
 TAKE_PROFIT_PCT = 2.0  # 2% TP
