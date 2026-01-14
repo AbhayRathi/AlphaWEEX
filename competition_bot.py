@@ -22,6 +22,7 @@ from core.weex_v2_client import WEEXv2Client
 from core.ai_logger import AITradingLogger
 from core.db import DatabaseManager
 from core.strategy_engine import StrategyEngine
+from core.funding_rate_analyzer import FundingRateAnalyzer
 
 # Load environment variables
 load_dotenv()
@@ -105,6 +106,9 @@ class CompetitionTradingBot:
         # Initialize database manager
         self.db = DatabaseManager("trading_memory.db")
         
+        # Initialize funding rate analyzer
+        self.funding_analyzer = FundingRateAnalyzer()
+        
         # Initialize strategy engine (LLM or fallback)
         self.use_llm = use_llm
         self.strategy_engine = None
@@ -156,6 +160,7 @@ class CompetitionTradingBot:
         logger.info(f"🎯 Risk Management: TP={TAKE_PROFIT_PCT}%, SL={STOP_LOSS_PCT}%")
         logger.info(f"💰 Equity Sizing: {EQUITY_SIZING_PCT}% per trade")
         logger.info(f"🛑 Kill Switch: {KILL_SWITCH_PCT}% drawdown limit")
+        logger.info(f"🔄 Contrarian Sentiment: Funding Rate Analysis Enabled")
         logger.info("=" * 60)
     
     def initialize_leverage(self) -> None:
@@ -431,18 +436,24 @@ class CompetitionTradingBot:
     
     def generate_signal(self, klines: List[List], symbol: str) -> Dict[str, Any]:
         """
-        Generate trading signal using LLM or fallback to RSI/SMA
+        Generate trading signal using LLM or fallback to RSI/SMA, adjusted with funding rate analysis
         
         Args:
             klines: K-lines data
             symbol: Trading symbol
             
         Returns:
-            Signal dictionary with action, confidence, and reasoning
+            Signal dictionary with action, confidence, and reasoning (adjusted with funding rate)
         """
         # Get account balance (for LLM context)
         # In a real implementation, fetch this from the API
         balance = 1000.0  # Default balance
+        
+        # Get funding rate for the symbol
+        funding_rate = self.client.get_funding_rate(symbol)
+        if funding_rate is None:
+            logger.warning(f"⚠️ Could not fetch funding rate for {symbol}, proceeding without funding rate analysis")
+            funding_rate = 0.0  # Default to neutral if unavailable
         
         if self.use_llm and self.strategy_engine:
             # Use LLM-based strategy
@@ -450,20 +461,26 @@ class CompetitionTradingBot:
                 # Get recent performance from database
                 performance = self.db.get_recent_performance(limit=20)
                 
-                # Get LLM decision
+                # Get LLM decision (it will include funding rate context)
                 decision = self.strategy_engine.get_decision(
                     symbol=symbol,
                     klines=klines,
                     performance=performance,
                     balance=balance,
-                    leverage=20
+                    leverage=20,
+                    funding_rate=funding_rate
                 )
                 
-                return {
+                # Apply funding rate adjustment to LLM decision
+                llm_signal = {
                     "action": decision["action"],
                     "confidence": decision["confidence"],
                     "reason": decision["reasoning"]
                 }
+                
+                adjusted_signal = self.funding_analyzer.adjust_signal_with_funding(llm_signal, funding_rate)
+                
+                return adjusted_signal
                 
             except Exception as e:
                 logger.error(f"LLM decision failed: {str(e)}, falling back to RSI/SMA")
@@ -520,9 +537,17 @@ class CompetitionTradingBot:
             confidence = 0.60
             reason = "Golden cross with price above SMA20"
         
-        return {
+        # Create base technical signal
+        technical_signal = {
             "action": action,
             "confidence": confidence,
+            "reason": reason
+        }
+        
+        # Adjust signal with funding rate analysis
+        adjusted_signal = self.funding_analyzer.adjust_signal_with_funding(technical_signal, funding_rate)
+        
+        return adjusted_signal
             "reason": reason
         }
     
