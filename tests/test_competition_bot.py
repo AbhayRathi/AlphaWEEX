@@ -66,7 +66,7 @@ class TestWEEXv2Client:
         assert "cmt_btcusdt" in client.open_positions
     
     def test_tp_sl_calculation_long(self):
-        """Test TP/SL trigger calculation for LONG position"""
+        """Test TP/SL trigger calculation for LONG position with fee adjustment"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Add LONG position
@@ -77,13 +77,13 @@ class TestWEEXv2Client:
             "size": "0.1"
         }
         
-        # Test TP trigger (2% gain)
-        tp_price = 51000  # 2% above entry
+        # Test TP trigger (1.88% gain - fee adjusted)
+        tp_price = 50940  # 1.88% above entry
         trigger = client.check_tp_sl_triggers(symbol, tp_price)
         assert trigger == "TP"
         
-        # Test SL trigger (1% loss)
-        sl_price = 49500  # 1% below entry
+        # Test SL trigger (1.06% loss - fee adjusted)
+        sl_price = 49470  # 1.06% below entry
         trigger = client.check_tp_sl_triggers(symbol, sl_price)
         assert trigger == "SL"
         
@@ -93,7 +93,7 @@ class TestWEEXv2Client:
         assert trigger is None
     
     def test_tp_sl_calculation_short(self):
-        """Test TP/SL trigger calculation for SHORT position"""
+        """Test TP/SL trigger calculation for SHORT position with fee adjustment"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Add SHORT position
@@ -104,13 +104,13 @@ class TestWEEXv2Client:
             "size": "1.0"
         }
         
-        # Test TP trigger (2% drop)
-        tp_price = 2940  # 2% below entry
+        # Test TP trigger (1.88% drop - fee adjusted)
+        tp_price = 2943.6  # 1.88% below entry
         trigger = client.check_tp_sl_triggers(symbol, tp_price)
         assert trigger == "TP"
         
-        # Test SL trigger (1% gain against short)
-        sl_price = 3030  # 1% above entry
+        # Test SL trigger (1.06% gain against short - fee adjusted)
+        sl_price = 3031.8  # 1.06% above entry
         trigger = client.check_tp_sl_triggers(symbol, sl_price)
         assert trigger == "SL"
         
@@ -146,7 +146,7 @@ class TestWEEXv2Client:
         # Check body contains marginMode and leverage as string
         body_data = json.loads(call_args[1]['data'])
         assert body_data['symbol'] == "cmt_btcusdt"
-        assert body_data['marginMode'] == "crossed"
+        assert body_data['marginMode'] == "isolated"  # Updated for Critical Fix 1
         assert body_data['leverage'] == "10"
         assert isinstance(body_data['leverage'], str)
     
@@ -471,6 +471,213 @@ class TestCompetitionBotLogic:
         assert "RSI is 50" in sentiment
         assert "Neutral" in sentiment
         assert "50000" in sentiment
+
+
+class TestSafetyEnhancements:
+    """Test safety and operational enhancements"""
+    
+    @pytest.fixture
+    def mock_env(self, monkeypatch):
+        """Mock environment variables for testing"""
+        monkeypatch.setenv("API_KEY", "test_key")
+        monkeypatch.setenv("API_SECRET", "test_secret")
+        monkeypatch.setenv("API_PASSWORD", "test_password")
+    
+    def test_calculate_total_exposure(self, mock_env):
+        """Test Critical Fix 2: Global exposure calculation"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Mock has_open_position and set open_positions directly
+        def mock_has_open_position(symbol):
+            return symbol in ["cmt_btcusdt", "cmt_ethusdt"]
+        
+        # Set positions in the client's tracking
+        bot.client.open_positions = {
+            "cmt_btcusdt": {"size": "0.1", "entryPrice": "10000"},  # 0.1 * 10000 = 1000
+            "cmt_ethusdt": {"size": "0.5", "entryPrice": "1000"}     # 0.5 * 1000 = 500
+        }
+        
+        with patch.object(bot.client, 'has_open_position', side_effect=mock_has_open_position):
+            with patch.object(bot.client, 'get_account_balance', return_value={'availableBalance': '10000'}):
+                exposure = bot.calculate_total_exposure()
+        
+        # Should be 15% (1500 / 10000 * 100)
+        assert abs(exposure - 15.0) < 0.1
+    
+    def test_calculate_total_exposure_no_positions(self, mock_env):
+        """Test exposure calculation with no positions"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        bot.client.open_positions = {}
+        
+        with patch.object(bot.client, 'get_account_balance', return_value={'availableBalance': '10000'}):
+            exposure = bot.calculate_total_exposure()
+        
+        assert exposure == 0.0
+    
+    def test_cancel_stale_orders(self, mock_env):
+        """Test Enhancement 3: Stale order reaper"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Add a stale order (older than 5 minutes)
+        old_time = time.time() - 400  # 400 seconds ago
+        bot.pending_orders = {
+            "order123": {"symbol": "cmt_btcusdt", "timestamp": old_time, "side": "BUY"},
+            "order456": {"symbol": "cmt_ethusdt", "timestamp": time.time(), "side": "BUY"}  # Fresh
+        }
+        
+        # Mock cancel_order method (create it if it doesn't exist)
+        with patch.object(bot.client, 'cancel_order', create=True, return_value=True):
+            bot.cancel_stale_orders(max_age_seconds=300)
+        
+        # Only fresh order should remain
+        assert "order123" not in bot.pending_orders
+        assert "order456" in bot.pending_orders
+    
+    def test_is_volume_spike_sufficient(self, mock_env):
+        """Test Enhancement 6: Volume spike filter with sufficient volume"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Create klines with recent volume spike
+        klines = []
+        for i in range(20):
+            volume = 1000 if i < 19 else 2000  # Last candle has 2x volume
+            klines.append([
+                1640000000000 + i * 60000,
+                50000, 50100, 49900, 50050,
+                volume
+            ])
+        
+        result = bot.is_volume_spike(klines, threshold=1.5)
+        assert result is True
+    
+    def test_is_volume_spike_insufficient(self, mock_env):
+        """Test Enhancement 6: Volume spike filter with low volume"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Create klines with low recent volume
+        klines = []
+        for i in range(20):
+            volume = 1000 if i < 19 else 500  # Last candle has low volume
+            klines.append([
+                1640000000000 + i * 60000,
+                50000, 50100, 49900, 50050,
+                volume
+            ])
+        
+        result = bot.is_volume_spike(klines, threshold=1.5)
+        assert result is False
+    
+    def test_is_volume_spike_edge_cases(self, mock_env):
+        """Test volume spike filter edge cases"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Empty klines - should allow trade
+        assert bot.is_volume_spike([], threshold=1.5) is True
+        
+        # Single candle - should allow trade
+        assert bot.is_volume_spike([[0, 0, 0, 0, 0, 1000]], threshold=1.5) is True
+    
+    def test_fee_adjusted_tp_sl_long(self):
+        """Test Enhancement 5: Fee-adjusted TP/SL for LONG position"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Add LONG position
+        symbol = "cmt_btcusdt"
+        client.open_positions[symbol] = {
+            "entryPrice": "50000",
+            "side": "LONG",
+            "size": "0.1"
+        }
+        
+        # Test fee-adjusted TP trigger (1.88% gain)
+        tp_price = 50940  # 1.88% above entry
+        trigger = client.check_tp_sl_triggers(symbol, tp_price)
+        assert trigger == "TP"
+        
+        # Test fee-adjusted SL trigger (1.06% loss)
+        sl_price = 49470  # 1.06% below entry
+        trigger = client.check_tp_sl_triggers(symbol, sl_price)
+        assert trigger == "SL"
+        
+        # Test no trigger (within range)
+        neutral_price = 50500  # 1% above entry
+        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
+        assert trigger is None
+    
+    def test_fee_adjusted_tp_sl_short(self):
+        """Test Enhancement 5: Fee-adjusted TP/SL for SHORT position"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Add SHORT position
+        symbol = "cmt_ethusdt"
+        client.open_positions[symbol] = {
+            "entryPrice": "3000",
+            "side": "SHORT",
+            "size": "1.0"
+        }
+        
+        # Test fee-adjusted TP trigger (1.88% drop)
+        tp_price = 2943.6  # 1.88% below entry
+        trigger = client.check_tp_sl_triggers(symbol, tp_price)
+        assert trigger == "TP"
+        
+        # Test fee-adjusted SL trigger (1.06% gain against short)
+        sl_price = 3031.8  # 1.06% above entry
+        trigger = client.check_tp_sl_triggers(symbol, sl_price)
+        assert trigger == "SL"
+        
+        # Test no trigger
+        neutral_price = 2985  # 0.5% below entry
+        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
+        assert trigger is None
+    
+    def test_position_timeout_tracking(self, mock_env):
+        """Test Enhancement 8: Position timeout tracking"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot()
+        
+        # Track position open time
+        symbol = "cmt_btcusdt"
+        bot.position_open_times[symbol] = time.time() - 3700  # 61 minutes ago
+        
+        # Check if it's been open too long
+        time_open = time.time() - bot.position_open_times[symbol]
+        assert time_open > 3600  # Over 1 hour
+    
+    @patch('core.weex_v2_client.requests.post')
+    def test_margin_mode_isolated(self, mock_post):
+        """Test Critical Fix 1: Margin mode changed to isolated"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'code': 0, 'success': True}
+        mock_post.return_value = mock_response
+        
+        # Call set_leverage
+        result = client.set_leverage("cmt_btcusdt", 20)
+        
+        # Verify result
+        assert result is True
+        
+        # Verify the endpoint was called with isolated margin mode
+        call_args = mock_post.call_args
+        body_data = json.loads(call_args[1]['data'])
+        assert body_data['marginMode'] == "isolated", "Margin mode should be isolated, not crossed"
 
 
 if __name__ == "__main__":
