@@ -255,9 +255,14 @@ class CompetitionTradingBot:
             total_exposure = 0.0
             for symbol in SYMBOL_LIST:
                 if self.client.has_open_position(symbol):
-                    pos = self.client.get_position_info(symbol)
-                    if pos and 'notionalValue' in pos:
-                        total_exposure += abs(float(pos['notionalValue']))
+                    # Get position from client's tracking
+                    pos = self.client.open_positions.get(symbol, {})
+                    if pos:
+                        # Calculate notional value = size * entry_price
+                        size = abs(float(pos.get('size', 0)))
+                        entry_price = float(pos.get('entryPrice', 0))
+                        notional_value = size * entry_price
+                        total_exposure += notional_value
             
             balance = self.client.get_account_balance()
             if balance and 'availableBalance' in balance:
