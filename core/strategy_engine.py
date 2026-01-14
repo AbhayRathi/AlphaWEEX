@@ -208,6 +208,10 @@ class StrategyEngine:
         # Initialize circuit breaker
         self.circuit_breaker = LLMCircuitBreaker(failure_threshold=5, timeout_minutes=15)
         
+        # Initialize funding rate analyzer (avoid recreating on every prompt)
+        from core.funding_rate_analyzer import FundingRateAnalyzer
+        self.funding_analyzer = FundingRateAnalyzer()
+        
         # Token usage tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -338,10 +342,8 @@ Recent Trades:
             except Exception as e:
                 logger.warning(f"Failed to get behavioral tags: {str(e)}")
         
-        # Format funding rate analysis
-        from core.funding_rate_analyzer import FundingRateAnalyzer
-        funding_analyzer = FundingRateAnalyzer()
-        funding_analysis = funding_analyzer.format_for_llm_prompt(funding_rate)
+        # Format funding rate analysis using the instance variable
+        funding_analysis = self.funding_analyzer.format_for_llm_prompt(funding_rate)
         
         # Aether-Evo Engine prompt format
         prompt = f"""You are the Aether-Evo Engine. An elite AI trading system with access to market data, behavioral psychology, funding rates, and performance history.

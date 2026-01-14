@@ -548,8 +548,6 @@ class CompetitionTradingBot:
         adjusted_signal = self.funding_analyzer.adjust_signal_with_funding(technical_signal, funding_rate)
         
         return adjusted_signal
-            "reason": reason
-        }
     
     def generate_sentiment(self, indicators: Dict[str, Any]) -> str:
         """
