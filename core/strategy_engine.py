@@ -208,6 +208,10 @@ class StrategyEngine:
         # Initialize circuit breaker
         self.circuit_breaker = LLMCircuitBreaker(failure_threshold=5, timeout_minutes=15)
         
+        # Initialize funding rate analyzer (avoid recreating on every prompt)
+        from core.funding_rate_analyzer import FundingRateAnalyzer
+        self.funding_analyzer = FundingRateAnalyzer()
+        
         # Token usage tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -303,7 +307,8 @@ Recent Trades:
     
     def _build_prompt(self, symbol: str, klines: List[List], 
                      performance: Dict[str, Any], balance: float = 1000.0,
-                     leverage: int = 20, current_price: float = 0.0) -> str:
+                     leverage: int = 20, current_price: float = 0.0,
+                     funding_rate: float = 0.0) -> str:
         """
         Build the complete prompt for LLM (Aether-Evo Engine format)
         
@@ -314,6 +319,7 @@ Recent Trades:
             balance: Current balance in USDT
             leverage: Trading leverage
             current_price: Current market price
+            funding_rate: Current funding rate as percentage
             
         Returns:
             Complete prompt string
@@ -336,8 +342,11 @@ Recent Trades:
             except Exception as e:
                 logger.warning(f"Failed to get behavioral tags: {str(e)}")
         
+        # Format funding rate analysis using the instance variable
+        funding_analysis = self.funding_analyzer.format_for_llm_prompt(funding_rate)
+        
         # Aether-Evo Engine prompt format
-        prompt = f"""You are the Aether-Evo Engine. An elite AI trading system with access to market data, behavioral psychology, and performance history.
+        prompt = f"""You are the Aether-Evo Engine. An elite AI trading system with access to market data, behavioral psychology, funding rates, and performance history.
 
 DATA:
 - Symbol: {symbol}
@@ -350,6 +359,8 @@ DATA:
 
 [Psychology]: {behavioral_tags}
 
+{funding_analysis}
+
 [Past Perf]:
 {trade_history}
 
@@ -357,8 +368,11 @@ TASK:
 Analyze the data and make a trading decision. Consider:
 1. Market momentum and price action patterns
 2. Behavioral psychology (FOMO, Panic, Revenge, Liquidity Hunter)
-3. Our trading history (learn from successes and failures)
-4. Risk management with {leverage}x leverage
+3. **Funding Rate Contrarian Strategy** (CRITICAL):
+   - If funding > 0.05%: RESTRICT long trades (over-leveraged, crash likely)
+   - If funding < -0.05%: PRIORITIZE long trades (short-squeeze likely)
+4. Our trading history (learn from successes and failures)
+5. Risk management with {leverage}x leverage
 
 RESPONSE FORMAT (JSON only):
 {{
@@ -367,7 +381,7 @@ RESPONSE FORMAT (JSON only):
     "reasoning": "Max 20 words explaining the decision"
 }}
 
-Be concise. Protect capital. Execute only high-probability setups."""
+Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDING RATE WARNINGS."""
         
         return prompt
     
@@ -529,7 +543,7 @@ Be concise. Protect capital. Execute only high-probability setups."""
     
     def get_decision(self, symbol: str, klines: List[List], 
                     performance: Dict[str, Any], balance: float = 1000.0,
-                    leverage: int = 20) -> Dict[str, Any]:
+                    leverage: int = 20, funding_rate: float = 0.0) -> Dict[str, Any]:
         """
         Get trading decision from LLM with circuit breaker protection
         
@@ -539,6 +553,7 @@ Be concise. Protect capital. Execute only high-probability setups."""
             performance: Recent performance metrics from database
             balance: Current balance in USDT
             leverage: Trading leverage
+            funding_rate: Current funding rate as percentage
             
         Returns:
             Dictionary with:
@@ -550,8 +565,8 @@ Be concise. Protect capital. Execute only high-probability setups."""
             # Get current price from klines
             current_price = float(klines[-1][4]) if klines and len(klines) > 0 else 0.0
             
-            # Build prompt
-            prompt = self._build_prompt(symbol, klines, performance, balance, leverage, current_price)
+            # Build prompt with funding rate
+            prompt = self._build_prompt(symbol, klines, performance, balance, leverage, current_price, funding_rate)
             
             # Call LLM with circuit breaker protection
             def _make_llm_call():

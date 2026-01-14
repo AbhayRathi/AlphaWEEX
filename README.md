@@ -88,10 +88,11 @@ See [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) for complete technical deta
 | File | Description |
 |------|-------------|
 | `SYSTEM_ARCHITECTURE.md` | Complete system architecture and data flow |
+| `CONTRARIAN_SENTIMENT_README.md` | **NEW** - Funding rate contrarian strategy documentation |
 | `scripts/check_integrity.py` | Final integrity verification script |
 | `main.py` | Main orchestrator coordinating all components |
 | `active_logic.py` | Current live trading strategy (auto-evolved) |
-| `tests/` | 72 comprehensive tests (adversary, shadow, narrative, integration) |
+| `tests/` | 72+ comprehensive tests (adversary, shadow, narrative, integration) |
 
 ---
 
@@ -135,21 +136,30 @@ Whale activity monitoring and market narrative tracking:
 - ✅ Elevates global risk level on large transfers
 - ✅ Early warning system for potential market movements
 
-### 4. **TradFi Oracle** (Phase 4 - Global Context)
+### 4. **Contrarian Sentiment Analyst** (NEW - Funding Rate Strategy)
+Funding rate analysis for contrarian trading opportunities:
+- ✅ **Live Funding Rate Monitoring**: Tracks funding rates for all 8 trading pairs
+- ✅ **Extreme Positive (>0.05%)**: Restricts LONG trades (over-leveraged, crash risk)
+- ✅ **Extreme Negative (<-0.05%)**: Prioritizes LONG trades (short-squeeze setup)
+- ✅ **Weighted Against RSI/MACD**: Adjusts technical signal confidence dynamically
+- ✅ **LLM Integration**: AI receives funding rate context for informed decisions
+- 📖 See [CONTRARIAN_SENTIMENT_README.md](CONTRARIAN_SENTIMENT_README.md) for details
+
+### 5. **TradFi Oracle** (Phase 4 - Global Context)
 Traditional finance integration for cross-market risk assessment:
 - ✅ Monitors **SPY/QQQ** via Alpaca Market Data API
 - ✅ Sets **global_risk_level** (NORMAL/HIGH) based on 1-hour moves
 - ✅ **Position sizing adjustment**: 50% reduction when SPY drops > 1%
 - ✅ Brings macro context to crypto trading decisions
 
-### 5. **Sentiment Agent** (Phase 4 - Market Psychology)
+### 6. **Sentiment Agent** (Phase 4 - Market Psychology)
 Fear & Greed Index integration with dynamic position sizing:
 - ✅ Fetches **Fear & Greed Index** from alternative.me
 - ✅ Analyzes Bitcoin news headlines
 - ✅ **Sentiment Multiplier**: 0.5-1.5x adjustment to position sizes
 - ✅ Reduces exposure during euphoria and panic
 
-### 6. **Evolution System** (Phase 2 - Self-Improvement)
+### 7. **Evolution System** (Phase 2 - Self-Improvement)
 Autonomous strategy evolution with safety gates:
 - ✅ **Architect** rewrites `active_logic.py` based on R1 suggestions
 - ✅ **Backtesting gate**: Sharpe > 1.2, Max Drawdown < 5%

@@ -11,6 +11,7 @@ import base64
 import requests
 import json
 import logging
+import urllib.parse
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -185,6 +186,49 @@ class WEEXv2Client:
             except Exception as e:
                 logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
                 return []
+    
+    def get_funding_rate(self, symbol: str) -> Optional[float]:
+        """
+        Get current funding rate for a symbol from WEEX
+        Endpoint: GET /capi/v2/market/funding-rate
+        
+        Args:
+            symbol: Trading symbol (e.g., "cmt_btcusdt")
+            
+        Returns:
+            Funding rate as percentage (e.g., 0.01 for 0.01%), or None if failed
+        """
+        try:
+            path = "/capi/v2/market/funding-rate"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0 or data.get('success'):
+                    funding_data = data.get('data', {})
+                    # Extract funding rate - try different field names
+                    funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
+                    if funding_rate is not None:
+                        # Convert to float and then to percentage if needed
+                        funding_rate_float = float(funding_rate)
+                        funding_rate_pct = funding_rate_float * 100 if abs(funding_rate_float) < 1 else funding_rate_float
+                        logger.debug(f"✅ Retrieved funding rate for {symbol}: {funding_rate_pct:.4f}%")
+                        return funding_rate_pct
+                    else:
+                        logger.warning(f"⚠️ Funding rate not found in response for {symbol}")
+                        return None
+                else:
+                    logger.error(f"❌ Funding rate error: {data.get('message', 'Unknown error')}")
+                    return None
+            else:
+                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get funding rate for {symbol}: {str(e)}")
+            return None
     
     def get_order_book(self, symbol: str, depth: int = 5) -> Optional[Dict[str, Any]]:
         """
