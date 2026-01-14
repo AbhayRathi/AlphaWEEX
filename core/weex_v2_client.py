@@ -326,7 +326,7 @@ class WEEXv2Client:
             path = "/capi/v2/account/leverage"
             body = {
                 "symbol": symbol,
-                "marginMode": "crossed",
+                "marginMode": "isolated",  # Critical Fix 1: Changed from crossed to isolated
                 "leverage": str(leverage)
             }
             
@@ -449,6 +449,7 @@ class WEEXv2Client:
     def check_tp_sl_triggers(self, symbol: str, current_price: float) -> Optional[str]:
         """
         Check if TP (2%) or SL (1%) should be triggered for an open position
+        Enhancement 5: Uses fee-adjusted percentages
         
         Args:
             symbol: Trading symbol
@@ -467,25 +468,31 @@ class WEEXv2Client:
         if entry_price == 0:
             return None
         
+        # Enhancement 5: Fee-adjusted thresholds
+        # EFFECTIVE_TP_PCT = 1.88% (2% - 0.12% fees)
+        # EFFECTIVE_SL_PCT = 1.06% (1% + 0.06% fees)
+        EFFECTIVE_TP_PCT = 1.88
+        EFFECTIVE_SL_PCT = 1.06
+        
         # Calculate price change percentage
         price_change_pct = ((current_price - entry_price) / entry_price) * 100
         
         # For LONG positions
         if position_side == "LONG":
-            if price_change_pct >= 2.0:
-                logger.info(f"🎯 Take Profit triggered for {symbol}: {price_change_pct:.2f}% gain")
+            if price_change_pct >= EFFECTIVE_TP_PCT:
+                logger.info(f"🎯 Take Profit triggered for {symbol}: {price_change_pct:.2f}% gain (fee-adjusted threshold: {EFFECTIVE_TP_PCT}%)")
                 return "TP"
-            elif price_change_pct <= -1.0:
-                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss")
+            elif price_change_pct <= -EFFECTIVE_SL_PCT:
+                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (fee-adjusted threshold: {EFFECTIVE_SL_PCT}%)")
                 return "SL"
         
         # For SHORT positions
         elif position_side == "SHORT":
-            if price_change_pct <= -2.0:
-                logger.info(f"🎯 Take Profit triggered for {symbol}: {abs(price_change_pct):.2f}% gain")
+            if price_change_pct <= -EFFECTIVE_TP_PCT:
+                logger.info(f"🎯 Take Profit triggered for {symbol}: {abs(price_change_pct):.2f}% gain (fee-adjusted threshold: {EFFECTIVE_TP_PCT}%)")
                 return "TP"
-            elif price_change_pct >= 1.0:
-                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss")
+            elif price_change_pct >= EFFECTIVE_SL_PCT:
+                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (fee-adjusted threshold: {EFFECTIVE_SL_PCT}%)")
                 return "SL"
         
         return None

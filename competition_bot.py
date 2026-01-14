@@ -63,6 +63,12 @@ TAKE_PROFIT_PCT = 2.0  # 2% TP
 STOP_LOSS_PCT = 1.0    # 1% SL
 EQUITY_SIZING_PCT = 10.0  # 10% of equity per trade
 KILL_SWITCH_PCT = 10.0  # Kill switch if equity drops >10% in 24h
+GLOBAL_MAX_EXPOSURE_PCT = 25.0  # Critical Fix 2: Max 25% of equity in active positions
+
+# Enhancement 5: Fee calculation
+TAKER_FEE_PCT = 0.06  # 0.06% taker fee on WEEX
+EFFECTIVE_TP_PCT = TAKE_PROFIT_PCT - (2 * TAKER_FEE_PCT)  # 2% - 0.12% = 1.88%
+EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
@@ -146,6 +152,17 @@ class CompetitionTradingBot:
         self.initial_equity = None
         self.equity_history = []  # Track equity over time
         
+        # Enhancement 3: Stale order tracking
+        self.pending_orders = {}  # {order_id: {"symbol": str, "timestamp": float, "side": str}}
+        
+        # Enhancement 7: Funding rate fetch monitoring
+        self.funding_rate_fetch_success = 0
+        self.funding_rate_fetch_total = 0
+        self.last_funding_rate_log = time.time()
+        
+        # Enhancement 8: Position timeout tracking
+        self.position_open_times = {}  # {symbol: timestamp}
+        
         # Running flag
         self.running = False
         
@@ -227,6 +244,30 @@ class CompetitionTradingBot:
             logger.error(f"Failed to calculate position size: {str(e)}")
             return POSITION_SIZE  # Fallback to default
     
+    def calculate_total_exposure(self) -> float:
+        """
+        Critical Fix 2: Calculate current notional exposure as % of total equity
+        
+        Returns:
+            Total exposure percentage
+        """
+        try:
+            total_exposure = 0.0
+            for symbol in SYMBOL_LIST:
+                if self.client.has_open_position(symbol):
+                    pos = self.client.get_position_info(symbol)
+                    if pos and 'notionalValue' in pos:
+                        total_exposure += abs(float(pos['notionalValue']))
+            
+            balance = self.client.get_account_balance()
+            if balance and 'availableBalance' in balance:
+                total_equity = float(balance['availableBalance'])
+                return (total_exposure / total_equity) * 100 if total_equity > 0 else 0.0
+            return 0.0
+        except Exception as e:
+            logger.error(f"Failed to calculate total exposure: {str(e)}")
+            return 0.0
+    
     def check_kill_switch(self) -> bool:
         """
         Check if kill switch should be activated
@@ -301,6 +342,52 @@ class CompetitionTradingBot:
                     logger.info(f"✅ Closed position for {symbol}")
             except Exception as e:
                 logger.error(f"Failed to close position for {symbol}: {str(e)}")
+    
+    def cancel_stale_orders(self, max_age_seconds: int = 300) -> None:
+        """
+        Enhancement 3: Cancel orders that haven't filled after max_age_seconds (default 5 min)
+        
+        Args:
+            max_age_seconds: Maximum age before canceling (default: 300 seconds = 5 minutes)
+        """
+        current_time = time.time()
+        stale_orders = []
+        
+        for order_id, order_info in list(self.pending_orders.items()):
+            age = current_time - order_info['timestamp']
+            if age > max_age_seconds:
+                try:
+                    self.client.cancel_order(order_info['symbol'], order_id)
+                    logger.warning(f"🗑️ Cancelled stale order {order_id} for {order_info['symbol']} (open for {age:.0f}s)")
+                    stale_orders.append(order_id)
+                except Exception as e:
+                    logger.error(f"Failed to cancel stale order {order_id}: {str(e)}")
+        
+        for order_id in stale_orders:
+            del self.pending_orders[order_id]
+    
+    def is_volume_spike(self, klines: List[List], threshold: float = 1.5) -> bool:
+        """
+        Enhancement 6: Check if recent volume is above average (prevents low-liquidity traps)
+        
+        Args:
+            klines: K-lines data
+            threshold: Volume multiplier threshold (default: 1.5)
+            
+        Returns:
+            True if volume is acceptable, False if too low
+        """
+        if not klines or len(klines) < 2:
+            return True  # Default to allowing trade if data insufficient
+        
+        volumes = [float(k[5]) for k in klines]  # Volume is index 5
+        avg_volume = sum(volumes) / len(volumes)
+        recent_volume = volumes[-1]
+        
+        is_spike = recent_volume > (avg_volume * threshold)
+        if not is_spike:
+            logger.info(f"Low volume detected: {recent_volume:.0f} vs avg {avg_volume:.0f} (threshold {threshold}x)")
+        return is_spike
     
     def get_behavioral_tag(self, klines: List[List]) -> str:
         """
@@ -642,9 +729,21 @@ class CompetitionTradingBot:
             
             # 6. Execute trade if confidence is high enough
             if signal["action"] == "BUY" and signal["confidence"] >= 0.65:
-                # Safety Guardrail: Check if position already exists
+                # Enhancement 9: Enhanced logging - Check if position already exists
                 if self.client.has_open_position(symbol):
-                    logger.info(f"⚠️ Position already exists for {symbol}, skipping BUY")
+                    logger.info(f"🚫 Skipping {symbol}: Position already exists")
+                    return
+                
+                # Critical Fix 2: Check global exposure limit BEFORE placing order
+                current_exposure = self.calculate_total_exposure()
+                new_position_pct = EQUITY_SIZING_PCT  # 10%
+                if current_exposure + new_position_pct > GLOBAL_MAX_EXPOSURE_PCT:
+                    logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
+                    return
+                
+                # Enhancement 6: Check volume spike filter
+                if not self.is_volume_spike(klines):
+                    logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
                     return
                 
                 # Calculate position size dynamically
@@ -656,6 +755,18 @@ class CompetitionTradingBot:
                 order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True)
                 
                 if order:
+                    # Enhancement 3: Track pending order
+                    order_id = order.get('orderId')
+                    if order_id:
+                        self.pending_orders[order_id] = {
+                            "symbol": symbol,
+                            "timestamp": time.time(),
+                            "side": "BUY"
+                        }
+                    
+                    # Enhancement 8: Track position open time
+                    self.position_open_times[symbol] = time.time()
+                    
                     # Record trade entry in database with new fields
                     self.db.record_trade_entry(
                         symbol=symbol,
@@ -674,13 +785,13 @@ class CompetitionTradingBot:
                         side="BUY",
                         size=position_size,
                         price=current_price,
-                        order_id=order.get('orderId')
+                        order_id=order_id
                     )
             
             elif signal["action"] == "SELL" and signal["confidence"] >= 0.65:
-                # Only SELL if we have a position
+                # Enhancement 9: Enhanced logging - Only SELL if we have a position
                 if not self.client.has_open_position(symbol):
-                    logger.debug(f"No position to sell for {symbol}")
+                    logger.info(f"🚫 Skipping {symbol}: No open position to sell")
                     return
                 
                 logger.info(f"🔴 SELL signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
@@ -693,6 +804,9 @@ class CompetitionTradingBot:
                 # Record trade exit in database
                 self.db.record_trade_exit(symbol, current_price, pnl_pct)
                 
+                # Enhancement 8: Clear position timeout tracking
+                self.position_open_times.pop(symbol, None)
+                
                 success = self.client.close_position(symbol)
                 
                 if success:
@@ -704,6 +818,17 @@ class CompetitionTradingBot:
                         price=current_price,
                         order_id=None
                     )
+            
+            elif signal["action"] == "HOLD":
+                # Enhancement 9: Enhanced logging - Low confidence
+                if signal["confidence"] < 0.65:
+                    logger.debug(f"🚫 Skipping {symbol}: Confidence too low ({signal['confidence']:.1%} < 65%)")
+            
+            # Enhancement 8: Check position timeout
+            if symbol in self.position_open_times:
+                time_open = time.time() - self.position_open_times[symbol]
+                if time_open > 3600:  # 1 hour
+                    logger.warning(f"⏰ {symbol} position held for {time_open/60:.1f}min (>1h) - TP/SL may not be working")
             
             # 7. Heartbeat logging (10-minute intervals) with enhanced data
             current_equity = self.get_current_equity()
@@ -750,10 +875,26 @@ class CompetitionTradingBot:
             iteration = 0
             
             while self.running:
+                # Enhancement 4: Check for emergency stop file
+                if os.path.exists("EMERGENCY_STOP"):
+                    logger.critical("🛑 EMERGENCY_STOP file detected - shutting down gracefully")
+                    # Close all positions
+                    for symbol in SYMBOL_LIST:
+                        if self.client.has_open_position(symbol):
+                            try:
+                                self.client.close_position(symbol)
+                                logger.info(f"✅ Closed {symbol} during emergency stop")
+                            except Exception as e:
+                                logger.error(f"Failed to close {symbol} during emergency: {e}")
+                    break
+                
                 iteration += 1
                 logger.info(f"\n{'=' * 60}")
                 logger.info(f"📊 Iteration {iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 logger.info(f"{'=' * 60}")
+                
+                # Enhancement 3: Cancel stale orders
+                self.cancel_stale_orders()
                 
                 # Check TP/SL for all positions
                 self.check_tp_sl_all_symbols()
