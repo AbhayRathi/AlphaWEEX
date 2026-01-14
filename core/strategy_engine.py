@@ -114,6 +114,14 @@ class LLMCircuitBreaker:
             self.state = 'OPEN'
         else:
             logger.warning(f"Circuit breaker: Failure {self.failures}/{self.failure_threshold}")
+    
+    def reset(self):
+        """Manually reset the circuit breaker to CLOSED state"""
+        logger.info("Circuit breaker: Manual reset requested")
+        self.failures = 0
+        self.state = 'CLOSED'
+        self.last_failure_time = None
+        logger.info("Circuit breaker: Reset complete (CLOSED)")
 
 
 class StrategyEngine:
@@ -207,6 +215,10 @@ class StrategyEngine:
         
         # Initialize circuit breaker
         self.circuit_breaker = LLMCircuitBreaker(failure_threshold=5, timeout_minutes=15)
+        
+        # Track DeepSeek reasoner failures for fallback
+        self.deepseek_reasoner_failures = 0
+        self.deepseek_reasoner_failure_threshold = 2
         
         # Initialize funding rate analyzer (avoid recreating on every prompt)
         from core.funding_rate_analyzer import FundingRateAnalyzer
@@ -421,8 +433,13 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             
             # Select model based on provider and context
             model = self.model
-            if self.provider == "deepseek" and not use_reasoner:
-                model = self.heartbeat_model
+            if self.provider == "deepseek":
+                # Check if we should fallback to deepseek-chat due to repeated reasoner failures
+                if self.deepseek_reasoner_failures >= self.deepseek_reasoner_failure_threshold:
+                    model = self.heartbeat_model  # Use deepseek-chat as fallback
+                    logger.info(f"🔄 Using deepseek-chat fallback after {self.deepseek_reasoner_failures} reasoner failures")
+                elif not use_reasoner:
+                    model = self.heartbeat_model
             
             response = self.client.chat.completions.create(
                 model=model,
@@ -431,10 +448,18 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=500,
+                timeout=60.0,  # Increased timeout to 60 seconds for DeepSeek reasoner
+                stream=False  # Explicitly disable streaming
             )
             
             latency_ms = (time.time() - start_time) * 1000
+            
+            # Reset DeepSeek reasoner failure counter on any successful call
+            if self.provider == "deepseek":
+                if self.deepseek_reasoner_failures > 0:
+                    logger.info(f"🔄 Resetting DeepSeek failure counter after successful call (was {self.deepseek_reasoner_failures})")
+                self.deepseek_reasoner_failures = 0
             
             # Track token usage
             usage = response.usage
@@ -486,6 +511,11 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             return parsed
             
         except Exception as e:
+            # Track DeepSeek reasoner failures for fallback (only when actually trying to use reasoner)
+            if self.provider == "deepseek" and model == "deepseek-reasoner":
+                self.deepseek_reasoner_failures += 1
+                logger.warning(f"⚠️ DeepSeek reasoner failure {self.deepseek_reasoner_failures}/{self.deepseek_reasoner_failure_threshold}")
+            
             logger.error(f"{self.provider.upper()} API error: {str(e)}")
             raise
     
@@ -634,6 +664,19 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             "circuit_breaker_state": self.circuit_breaker.state,
             "circuit_breaker_failures": self.circuit_breaker.failures
         }
+    
+    def reset_circuit_breaker(self):
+        """
+        Manually reset the circuit breaker to CLOSED state
+        
+        Useful for resetting on bot startup to avoid persistent OPEN state
+        from previous failed runs.
+        """
+        self.circuit_breaker.reset()
+        # Also reset DeepSeek reasoner failure counter
+        if self.provider == "deepseek":
+            self.deepseek_reasoner_failures = 0
+            logger.info("🔄 DeepSeek reasoner failure counter reset")
     
     def generate_heartbeat_sentiment(self, symbol: str, klines: List[List], 
                                      current_equity: float) -> str:
