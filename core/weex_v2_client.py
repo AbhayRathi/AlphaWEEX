@@ -32,6 +32,13 @@ class WEEXv2Client:
     
     BASE_URL = "https://api-contract.weex.com"
     
+    # Alpha-Apex Profit Target and Stop Loss Thresholds
+    FIRST_TARGET_PCT = 0.25  # First partial at +0.25%
+    SECOND_TARGET_PCT = 0.50  # Reinvestment trigger at +0.50%
+    INITIAL_SL_LONG_PCT = 0.50  # Initial stop loss for longs (0.50%)
+    INITIAL_SL_SHORT_PCT = 0.40  # Initial stop loss for shorts (0.40% - tighter)
+    BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
+    
     def __init__(self, api_key: str, api_secret: str, api_password: str):
         """
         Initialize WEEX v2 Client
@@ -564,11 +571,12 @@ class WEEXv2Client:
         
         state = self.position_scaling_state[symbol]
         
-        # Alpha-Apex targets (fee-adjusted)
-        FIRST_TARGET_PCT = 0.25  # First partial at +0.25%
-        SECOND_TARGET_PCT = 0.50  # Reinvestment trigger at +0.50%
-        INITIAL_SL_PCT = 1.06  # Initial stop loss (1% + fees)
-        BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
+        # Alpha-Apex targets (fee-adjusted) - defined as class constants
+        FIRST_TARGET_PCT = self.FIRST_TARGET_PCT
+        SECOND_TARGET_PCT = self.SECOND_TARGET_PCT
+        INITIAL_SL_LONG_PCT = self.INITIAL_SL_LONG_PCT
+        INITIAL_SL_SHORT_PCT = self.INITIAL_SL_SHORT_PCT
+        BREAKEVEN_SL_PCT = self.BREAKEVEN_SL_PCT
         
         # Calculate price change percentage
         price_change_pct = ((current_price - entry_price) / entry_price) * 100
@@ -582,9 +590,9 @@ class WEEXv2Client:
                     logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {price_change_pct:.2f}%")
                     return "SL"
             else:
-                # Initial stop loss
-                if price_change_pct <= -INITIAL_SL_PCT:
-                    logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss")
+                # Initial stop loss (0.50% for longs)
+                if price_change_pct <= -INITIAL_SL_LONG_PCT:
+                    logger.warning(f"🛑 LONG Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (threshold: {INITIAL_SL_LONG_PCT:.2f}%)")
                     return "SL"
             
             # Check profit targets
@@ -608,8 +616,9 @@ class WEEXv2Client:
                     logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}%")
                     return "SL"
             else:
-                if short_pnl_pct <= -INITIAL_SL_PCT:
-                    logger.warning(f"🛑 Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}% loss")
+                # Initial stop loss (0.40% for shorts - tighter due to unlimited upside risk)
+                if short_pnl_pct <= -INITIAL_SL_SHORT_PCT:
+                    logger.warning(f"🛑 SHORT Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}% loss (threshold: {INITIAL_SL_SHORT_PCT:.2f}%)")
                     return "SL"
             
             # Check profit targets

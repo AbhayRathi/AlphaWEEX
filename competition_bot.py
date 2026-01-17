@@ -62,6 +62,8 @@ SYMBOL_LIST = [
 # Risk Management
 TAKE_PROFIT_PCT = 2.0  # 2% TP
 STOP_LOSS_PCT = 1.0    # 1% SL
+SL_THRESHOLD_LONG_PCT = 0.50   # 0.50% stop-loss for longs (used in Alpha-Apex partial profit system)
+SL_THRESHOLD_SHORT_PCT = 0.40  # 0.40% stop-loss for shorts (tighter due to unlimited upside risk)
 EQUITY_SIZING_PCT = 10.0  # 10% of equity per trade
 KILL_SWITCH_PCT = 10.0  # Kill switch if equity drops >10% in 24h
 GLOBAL_MAX_EXPOSURE_PCT = 25.0  # Critical Fix 2: Max 25% of equity in active positions
@@ -80,6 +82,12 @@ VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, a
 VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 AUTO_FLIP_COOLDOWN_SECONDS = 60  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
+
+# Bi-Directional Trading Enhancements
+SHORT_POSITION_SIZE_REDUCTION = 0.80  # 20% smaller position size for shorts (unlimited risk)
+SELL_SIGNAL_HIGH_CONFIDENCE = 0.78  # Higher confidence required for shorts (was 0.65)
+STRONG_UPTREND_THRESHOLD = 0.02  # 2% - block shorts when SMA50 > SMA200 * 1.02
+MAX_SHORT_HOLD_HOURS = 48  # Maximum hold time for shorts to avoid funding fee erosion
 
 
 class CompetitionTradingBot:
@@ -176,6 +184,9 @@ class CompetitionTradingBot:
         # Alpha-Apex: Auto-flip cooldown tracking
         self.last_flip_time = {}  # {symbol: timestamp}
         
+        # NEW: Short entry time tracking for max hold time
+        self.short_entry_times = {}  # Track when each short was opened
+        
         # Running flag
         self.running = False
         
@@ -229,7 +240,7 @@ class CompetitionTradingBot:
             logger.error(f"Failed to get equity: {str(e)}")
             return 1000.0
     
-    def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20) -> float:
+    def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20, side: str = "BUY") -> float:
         """
         Calculate position size using 10% equity sizing
         Formula: qty = (Account_Balance * 0.10 * Leverage) / Current_Price
@@ -238,6 +249,7 @@ class CompetitionTradingBot:
             symbol: Trading symbol
             current_price: Current market price
             leverage: Trading leverage
+            side: Trade side ("BUY" or "SELL")
             
         Returns:
             Position size rounded to correct precision
@@ -246,7 +258,14 @@ class CompetitionTradingBot:
             equity = self.get_current_equity()
             
             # Calculate position size
-            qty = (equity * (EQUITY_SIZING_PCT / 100.0) * leverage) / current_price
+            position_value = equity * (EQUITY_SIZING_PCT / 100.0) * leverage
+            
+            # NEW: Smaller size for shorts to account for unlimited risk
+            if side == "SELL":
+                position_value *= SHORT_POSITION_SIZE_REDUCTION  # 20% smaller
+                logger.info(f"📉 SHORT position sizing: Reduced by 20% for risk management")
+            
+            qty = position_value / current_price
             
             # Round to correct precision
             qty = self.client.round_qty(symbol, qty)
@@ -629,14 +648,29 @@ class CompetitionTradingBot:
         # Strong overbought = SELL
         elif rsi > 75:
             action = "SELL"
-            confidence = 0.65
-            reason = f"Strong overbought RSI ({rsi:.1f})"
+            confidence = SELL_SIGNAL_HIGH_CONFIDENCE  # Higher confidence for shorts (0.78)
+            reason = f"Strong overbought RSI ({rsi:.1f}) - high confidence short"
         
         # Golden cross = BUY
         elif sma_20 > sma_50 and current_price > sma_20:
             action = "BUY"
             confidence = 0.60
             reason = "Golden cross with price above SMA20"
+        
+        # NEW: Calculate trend strength and block shorts in strong uptrends
+        closes = [float(k[4]) for k in klines]
+        sma_50_long = sum(closes[-50:]) / 50 if len(closes) >= 50 else closes[-1]
+        sma_200 = sum(closes[-200:]) / 200 if len(closes) >= 200 else sma_50_long
+        
+        # Block shorts in strong uptrends
+        if action == "SELL":
+            uptrend_strength = (sma_50_long - sma_200) / sma_200 if sma_200 > 0 else 0
+            
+            if uptrend_strength > STRONG_UPTREND_THRESHOLD:  # SMA50 is >2% above SMA200
+                logger.info(f"🚫 Blocking SHORT: Strong uptrend detected (SMA50: {sma_50_long:.2f}, SMA200: {sma_200:.2f}, strength: {uptrend_strength:.2%})")
+                action = "HOLD"
+                confidence = 0.0
+                reason = "Avoided counter-trend short in strong uptrend"
         
         # Create base technical signal
         technical_signal = {
@@ -694,6 +728,31 @@ class CompetitionTradingBot:
                     continue
                 
                 current_price = float(klines[-1][4])
+                
+                # NEW: Check hold duration for shorts (48-hour max hold)
+                if self.client.has_open_position(symbol):
+                    position = self.client.open_positions.get(symbol, {})
+                    position_side = position.get('side', '').upper()
+                    
+                    if position_side == "SHORT" and symbol in self.short_entry_times:
+                        entry_time = self.short_entry_times[symbol]
+                        hold_duration_hours = (time.time() - entry_time) / 3600
+                        
+                        if hold_duration_hours > MAX_SHORT_HOLD_HOURS:  # 48-hour max hold
+                            logger.info(f"⏰ Closing SHORT on {symbol}: Max hold time reached ({hold_duration_hours:.1f}h)")
+                            success = self.client.close_position(symbol)
+                            
+                            if success:
+                                # Clean up tracking
+                                del self.short_entry_times[symbol]
+                                
+                                # Record exit
+                                entry_price = float(position.get('entryPrice', current_price))
+                                pnl_pct = -((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                                self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                                
+                                self.ai_logger.log_tp_sl_trigger(symbol, "MAX_HOLD_TIME", entry_price, current_price, pnl_pct)
+                            continue
                 
                 # Check TP/SL (now returns PARTIAL_1, PARTIAL_2, SL, or None)
                 trigger = self.client.check_tp_sl_triggers(symbol, current_price)
@@ -769,6 +828,10 @@ class CompetitionTradingBot:
                         success = self.client.close_position(symbol)
                         
                         if success:
+                            # NEW: Clean up short entry time tracking
+                            if symbol in self.short_entry_times:
+                                del self.short_entry_times[symbol]
+                            
                             self.ai_logger.log_order_execution(
                                 symbol=symbol,
                                 side="CLOSE",
@@ -797,7 +860,7 @@ class CompetitionTradingBot:
                                             logger.info(f"🎯 Alpha-Apex Auto-Flip: Entering {opposite_action} on {symbol} (Confidence: {flip_signal['confidence']:.2%})")
                                             
                                             # Calculate position size for flip
-                                            flip_size = self.calculate_position_size(symbol, current_price)
+                                            flip_size = self.calculate_position_size(symbol, current_price, side=opposite_action)
                                             flip_order = self.client.place_market_order(symbol, opposite_action, flip_size, check_spread=True)
                                             
                                             if flip_order:
@@ -956,12 +1019,22 @@ class CompetitionTradingBot:
                         return
                     
                     # Calculate position size for SHORT
-                    position_size = self.calculate_position_size(symbol, current_price)
+                    position_size = self.calculate_position_size(symbol, current_price, side="SELL")
                     
                     # Place SELL order to open SHORT
                     order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True)
                     
                     if order:
+                        logger.info(f"✅ SHORT order placed successfully on {symbol}")
+                        
+                        # NEW: Verify position with brief wait
+                        time.sleep(1.5)  # Give exchange time to update
+                        
+                        if self.client.has_open_position(symbol):
+                            logger.info(f"✅ SHORT position confirmed on {symbol}")
+                        else:
+                            logger.warning(f"⚠️ SHORT order filled but position not visible yet on {symbol} (may appear next loop)")
+                        
                         order_id = order.get('orderId')
                         if order_id:
                             self.pending_orders[order_id] = {
@@ -971,6 +1044,9 @@ class CompetitionTradingBot:
                             }
                         
                         self.position_open_times[symbol] = time.time()
+                        
+                        # NEW: Track short entry time for max hold time
+                        self.short_entry_times[symbol] = time.time()
                         
                         self.db.record_trade_entry(
                             symbol=symbol,
@@ -1145,6 +1221,21 @@ class CompetitionTradingBot:
         logger.info(f"   Total Trades: {performance.get('total_trades', 0)}")
         logger.info(f"   Win Rate: {performance.get('win_rate', 0)*100:.1f}%")
         logger.info(f"   Total P&L: {performance.get('total_pnl', 0):+.2f}%")
+        
+        # NEW: Display performance by direction (LONG vs SHORT)
+        perf_by_dir = self.db.get_performance_by_direction()
+        
+        if "BUY" in perf_by_dir or "LONG" in perf_by_dir:
+            # Handle both "BUY" and "LONG" naming
+            long_stats = perf_by_dir.get("BUY") or perf_by_dir.get("LONG")
+            if long_stats:
+                logger.info(f"   📊 LONG Performance: {long_stats['win_rate']*100:.1f}% WR, {long_stats['avg_pnl']:+.2f}% avg, {long_stats['total_trades']} trades")
+        
+        if "SELL" in perf_by_dir or "SHORT" in perf_by_dir:
+            # Handle both "SELL" and "SHORT" naming
+            short_stats = perf_by_dir.get("SELL") or perf_by_dir.get("SHORT")
+            if short_stats:
+                logger.info(f"   📊 SHORT Performance: {short_stats['win_rate']*100:.1f}% WR, {short_stats['avg_pnl']:+.2f}% avg, {short_stats['total_trades']} trades")
         
         # Display LLM usage stats if available
         if self.use_llm and self.strategy_engine:

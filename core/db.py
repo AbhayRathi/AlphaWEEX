@@ -333,6 +333,46 @@ class DatabaseManager:
             logger.error(f"Failed to get all trades: {str(e)}")
             return []
     
+    def get_performance_by_direction(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get win rate and avg PnL split by LONG/SHORT
+        
+        Returns:
+            Dictionary with performance by side (LONG/SHORT)
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            query = """
+            SELECT 
+                side,
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN outcome > 0 THEN 1 ELSE 0 END) as wins,
+                AVG(outcome) as avg_pnl,
+                SUM(outcome) as total_pnl
+            FROM trades
+            WHERE exit_timestamp IS NOT NULL
+            GROUP BY side
+            """
+            
+            cursor.execute(query)
+            results = {}
+            for row in cursor.fetchall():
+                side, total, wins, avg_pnl, total_pnl = row
+                results[side] = {
+                    "total_trades": total,
+                    "wins": wins,
+                    "win_rate": wins / total if total > 0 else 0,
+                    "avg_pnl": avg_pnl or 0,
+                    "total_pnl": total_pnl or 0
+                }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to get performance by direction: {str(e)}")
+            return {}
+    
     def close(self) -> None:
         """Close database connection"""
         if self.conn:
