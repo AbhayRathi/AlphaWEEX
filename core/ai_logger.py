@@ -156,6 +156,35 @@ class AITradingLogger:
         self._write_json_log(log_entry)
         logger.info(f"📊 Decision: {action} {symbol} (Confidence: {confidence:.2%})")
     
+    def log_decision(self, symbol: str, decision: str, confidence: float, reason: str) -> None:
+        """
+        Log an AI decision with reasoning
+        
+        Args:
+            symbol: Trading symbol
+            decision: Trade decision (BUY, SELL, HOLD, LONG, SHORT)
+            confidence: Confidence level (0.0 to 1.0)
+            reason: Reasoning for the decision (max 100 chars recommended)
+        """
+        # Format the log with a clear visual separator for the reason
+        message = (
+            f"📊 Decision: {decision} {symbol} "
+            f"(Confidence: {confidence:.2%})\n"
+            f"   📝 Reason: {reason}"
+        )
+        logger.info(message)
+        
+        # Also write to JSON log for persistence
+        log_entry = {
+            "type": "AI_DECISION",
+            "timestamp": datetime.now().isoformat(),
+            "symbol": symbol,
+            "decision": decision,
+            "confidence": confidence,
+            "reason": reason
+        }
+        self._write_json_log(log_entry)
+    
     def log_order_execution(self, symbol: str, side: str, size: float, 
                            price: Optional[float] = None, order_id: Optional[str] = None) -> None:
         """

@@ -923,7 +923,16 @@ class CompetitionTradingBot:
                     volatility_bypass = True
                     logger.info(f"⚡ Volatility bypass active for {symbol}: 5-min change {price_change_5min_pct:.2f}% > {VOLATILITY_BYPASS_THRESHOLD}%")
             
-            # 5. Log decision with AI reasoning
+            # 5. Log decision with AI reasoning (for every scan, including HOLD)
+            # First log with the new log_decision method for easy scannability
+            self.ai_logger.log_decision(
+                symbol=symbol,
+                decision=signal["action"],
+                confidence=signal["confidence"],
+                reason=signal["reason"]
+            )
+            
+            # Also log to the detailed trade decision log
             indicators = self.analyze_market(klines) if not self.use_llm else {"current_price": current_price}
             self.ai_logger.log_trade_decision(
                 symbol=symbol,
