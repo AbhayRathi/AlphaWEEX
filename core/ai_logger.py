@@ -164,7 +164,11 @@ class AITradingLogger:
             symbol: Trading symbol
             decision: Trade decision (BUY, SELL, HOLD, LONG, SHORT)
             confidence: Confidence level (0.0 to 1.0)
-            reason: Reasoning for the decision (max 100 chars recommended)
+            reason: Reasoning for the decision (concise explanation)
+        
+        Note:
+            The LLM prompt requests max 20 words (~100 chars) for reasoning,
+            but this method accepts any length string.
         """
         # Format the log with a clear visual separator for the reason
         message = (
