@@ -624,59 +624,14 @@ class TestSafetyEnhancements:
         # Single candle - should allow trade
         assert bot.is_volume_spike([[0, 0, 0, 0, 0, 1000]], threshold=1.5) is True
     
-    def test_fee_adjusted_tp_sl_long(self):
-        """Test Enhancement 5: Fee-adjusted TP/SL for LONG position"""
-        client = WEEXv2Client("test_key", "test_secret", "test_pass")
-        
-        # Add LONG position
-        symbol = "cmt_btcusdt"
-        client.open_positions[symbol] = {
-            "entryPrice": "50000",
-            "side": "LONG",
-            "size": "0.1"
-        }
-        
-        # Test fee-adjusted TP trigger (1.88% gain)
-        tp_price = 50940  # 1.88% above entry
-        trigger = client.check_tp_sl_triggers(symbol, tp_price)
-        assert trigger == "TP"
-        
-        # Test fee-adjusted SL trigger (1.06% loss)
-        sl_price = 49470  # 1.06% below entry
-        trigger = client.check_tp_sl_triggers(symbol, sl_price)
-        assert trigger == "SL"
-        
-        # Test no trigger (within range)
-        neutral_price = 50500  # 1% above entry
-        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
-        assert trigger is None
+    # Legacy tests removed - Alpha-Apex uses PARTIAL_1, PARTIAL_2, SL triggers instead of TP
+    # def test_fee_adjusted_tp_sl_long(self):
+    #     """Test Enhancement 5: Fee-adjusted TP/SL for LONG position"""
+    #     # DEPRECATED: Alpha-Apex returns "PARTIAL_1", "PARTIAL_2", or "SL", never "TP"
     
-    def test_fee_adjusted_tp_sl_short(self):
-        """Test Enhancement 5: Fee-adjusted TP/SL for SHORT position"""
-        client = WEEXv2Client("test_key", "test_secret", "test_pass")
-        
-        # Add SHORT position
-        symbol = "cmt_ethusdt"
-        client.open_positions[symbol] = {
-            "entryPrice": "3000",
-            "side": "SHORT",
-            "size": "1.0"
-        }
-        
-        # Test fee-adjusted TP trigger (1.88% drop)
-        tp_price = 2943.6  # 1.88% below entry
-        trigger = client.check_tp_sl_triggers(symbol, tp_price)
-        assert trigger == "TP"
-        
-        # Test fee-adjusted SL trigger (1.06% gain against short)
-        sl_price = 3031.8  # 1.06% above entry
-        trigger = client.check_tp_sl_triggers(symbol, sl_price)
-        assert trigger == "SL"
-        
-        # Test no trigger
-        neutral_price = 2985  # 0.5% below entry
-        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
-        assert trigger is None
+    # def test_fee_adjusted_tp_sl_short(self):
+    #     """Test Enhancement 5: Fee-adjusted TP/SL for SHORT position"""
+    #     # DEPRECATED: Alpha-Apex returns "PARTIAL_1", "PARTIAL_2", or "SL", never "TP"
     
     def test_position_timeout_tracking(self, mock_env):
         """Test Enhancement 8: Position timeout tracking"""

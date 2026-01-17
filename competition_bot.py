@@ -78,6 +78,7 @@ MIN_CONFIDENCE = 0.75  # Alpha-Apex: Minimum confidence threshold
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
+MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 
 
 class CompetitionTradingBot:
@@ -170,6 +171,9 @@ class CompetitionTradingBot:
         
         # Enhancement 8: Position timeout tracking
         self.position_open_times = {}  # {symbol: timestamp}
+        
+        # Alpha-Apex: Auto-flip cooldown tracking
+        self.last_flip_time = {}  # {symbol: timestamp}
         
         # Running flag
         self.running = False
@@ -728,7 +732,12 @@ class CompetitionTradingBot:
                             reinvest_size = reinvest_value / current_price
                             reinvest_size = self.client.round_qty(symbol, reinvest_size)
                             
-                            if reinvest_size > 0:
+                            # Check minimum order value before placing order
+                            reinvest_value_usdt = reinvest_size * current_price
+                            if reinvest_value_usdt < MIN_ORDER_VALUE_USDT:
+                                logger.info(f"⚠️ Reinvest too small ({reinvest_value_usdt:.2f} USDT < {MIN_ORDER_VALUE_USDT}), skipping")
+                                state["reinvested"] = True  # Mark as done to avoid retry
+                            elif reinvest_size > 0:
                                 logger.info(f"📈 Alpha-Apex: Re-investing {reinvest_size} on {symbol} (House Money)")
                                 side = "BUY" if position_side == "LONG" else "SELL"
                                 reinvest_order = self.client.place_market_order(symbol, side, reinvest_size, check_spread=False)
@@ -768,34 +777,43 @@ class CompetitionTradingBot:
                             
                             # Alpha-Apex Auto-Flip: Check for immediate reversal signal
                             if is_breakeven:
-                                logger.info(f"🔄 Alpha-Apex: Checking for Auto-Flip on {symbol} (stopped at break-even)")
-                                # Get fresh klines for signal
-                                flip_klines = self.client.get_market_klines(symbol, interval='1m', limit=100)
-                                if flip_klines:
-                                    flip_signal = self.generate_signal(flip_klines, symbol)
-                                    
-                                    # Check for strong opposite signal
-                                    opposite_action = "SELL" if position_side == "LONG" else "BUY"
-                                    if flip_signal["action"] == opposite_action and flip_signal["confidence"] >= MIN_CONFIDENCE:
-                                        logger.info(f"🎯 Alpha-Apex Auto-Flip: Entering {opposite_action} on {symbol} (Confidence: {flip_signal['confidence']:.2%})")
+                                # Check cooldown to prevent whipsaw
+                                current_time = time.time()
+                                last_flip = self.last_flip_time.get(symbol, 0)
+                                if current_time - last_flip < 60:
+                                    logger.info(f"⏱️ Auto-Flip cooldown active for {symbol} ({60 - (current_time - last_flip):.0f}s remaining)")
+                                else:
+                                    logger.info(f"🔄 Alpha-Apex: Checking for Auto-Flip on {symbol} (stopped at break-even)")
+                                    # Get fresh klines for signal
+                                    flip_klines = self.client.get_market_klines(symbol, interval='1m', limit=100)
+                                    if flip_klines:
+                                        flip_signal = self.generate_signal(flip_klines, symbol)
                                         
-                                        # Calculate position size for flip
-                                        flip_size = self.calculate_position_size(symbol, current_price)
-                                        flip_order = self.client.place_market_order(symbol, opposite_action, flip_size, check_spread=True)
-                                        
-                                        if flip_order:
-                                            self.db.record_trade_entry(
-                                                symbol=symbol,
-                                                side=opposite_action,
-                                                price=current_price,
-                                                size=flip_size,
-                                                reasoning=f"Auto-Flip: {flip_signal['reason']}",
-                                                confidence=flip_signal["confidence"],
-                                                ai_reasoning=flip_signal["reason"],
-                                                behavioral_tag="AUTO_FLIP",
-                                                confidence_score=flip_signal["confidence"]
-                                            )
-                                            logger.info(f"✅ Auto-Flip executed successfully for {symbol}")
+                                        # Check for strong opposite signal
+                                        opposite_action = "SELL" if position_side == "LONG" else "BUY"
+                                        if flip_signal["action"] == opposite_action and flip_signal["confidence"] >= MIN_CONFIDENCE:
+                                            logger.info(f"🎯 Alpha-Apex Auto-Flip: Entering {opposite_action} on {symbol} (Confidence: {flip_signal['confidence']:.2%})")
+                                            
+                                            # Calculate position size for flip
+                                            flip_size = self.calculate_position_size(symbol, current_price)
+                                            flip_order = self.client.place_market_order(symbol, opposite_action, flip_size, check_spread=True)
+                                            
+                                            if flip_order:
+                                                # Record flip time
+                                                self.last_flip_time[symbol] = current_time
+                                                
+                                                self.db.record_trade_entry(
+                                                    symbol=symbol,
+                                                    side=opposite_action,
+                                                    price=current_price,
+                                                    size=flip_size,
+                                                    reasoning=f"Auto-Flip: {flip_signal['reason']}",
+                                                    confidence=flip_signal["confidence"],
+                                                    ai_reasoning=flip_signal["reason"],
+                                                    behavioral_tag="AUTO_FLIP",
+                                                    confidence_score=flip_signal["confidence"]
+                                                )
+                                                logger.info(f"✅ Auto-Flip executed successfully for {symbol}")
             
             except Exception as e:
                 logger.error(f"Error checking TP/SL for {symbol}: {str(e)}")

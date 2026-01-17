@@ -56,11 +56,19 @@ class WEEXv2Client:
         # {symbol: {"partial_taken": bool, "breakeven_set": bool, "reinvested": bool, "original_size": float}}
         self.position_scaling_state: Dict[str, Dict[str, Any]] = {}
         
+        # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
+        self.session = requests.Session()
+        
         # Precision settings for different symbols
         self.precision_map = {
-            "cmt_btcusdt": 4,  # BTC: 4 decimals
-            "cmt_ethusdt": 3,  # ETH: 3 decimals
-            "cmt_solusdt": 2,  # SOL: 2 decimals
+            "cmt_btcusdt": 4,   # BTC: 4 decimals
+            "cmt_ethusdt": 3,   # ETH: 3 decimals
+            "cmt_solusdt": 2,   # SOL: 2 decimals
+            "cmt_adausdt": 1,   # ADA: 1 decimal
+            "cmt_dogeusdt": 0,  # DOGE: 0 decimals (whole numbers)
+            "cmt_xrpusdt": 1,   # XRP: 1 decimal
+            "cmt_bnbusdt": 3,   # BNB: 3 decimals
+            "cmt_ltcusdt": 2,   # LTC: 2 decimals
         }
     
     def round_qty(self, symbol: str, qty: float) -> float:
@@ -74,7 +82,10 @@ class WEEXv2Client:
         Returns:
             Rounded quantity
         """
-        precision = self.precision_map.get(symbol, 2)  # Default to 2 decimals
+        precision = self.precision_map.get(symbol)
+        if precision is None:
+            logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+            precision = 2
         return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
@@ -137,9 +148,9 @@ class WEEXv2Client:
         
         try:
             if method.upper() == "GET":
-                response = requests.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=10)
             else:
-                response = requests.post(url, headers=headers, data=body_str, timeout=10)
+                response = self.session.post(url, headers=headers, data=body_str, timeout=10)
             
             # Check for 521 error (Firewall block)
             if response.status_code == 521:
@@ -679,3 +690,9 @@ class WEEXv2Client:
             logger.info(f"✅ Partial close successful. Remaining size: {new_size}")
         
         return result
+    
+    def close_session(self):
+        """Close the persistent HTTP session"""
+        if hasattr(self, 'session'):
+            self.session.close()
+            logger.info("🔌 HTTP session closed")
