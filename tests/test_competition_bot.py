@@ -66,7 +66,7 @@ class TestWEEXv2Client:
         assert "cmt_btcusdt" in client.open_positions
     
     def test_tp_sl_calculation_long(self):
-        """Test TP/SL trigger calculation for LONG position with fee adjustment"""
+        """Test Alpha-Apex multi-tier TP/SL calculation for LONG position"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Add LONG position
@@ -77,23 +77,44 @@ class TestWEEXv2Client:
             "size": "0.1"
         }
         
-        # Test TP trigger (1.88% gain - fee adjusted)
-        tp_price = 50940  # 1.88% above entry
-        trigger = client.check_tp_sl_triggers(symbol, tp_price)
-        assert trigger == "TP"
+        # Test first partial trigger at +0.25%
+        partial1_price = 50125  # 0.25% above entry
+        trigger = client.check_tp_sl_triggers(symbol, partial1_price)
+        assert trigger == "PARTIAL_1"
+        
+        # Mark first partial taken
+        client.position_scaling_state[symbol] = {
+            "partial_taken": True,
+            "breakeven_set": True,
+            "reinvested": False,
+            "original_size": 0.1,
+            "realized_profit": 0.125
+        }
+        
+        # Test second partial trigger at +0.50%
+        partial2_price = 50250  # 0.50% above entry
+        trigger = client.check_tp_sl_triggers(symbol, partial2_price)
+        assert trigger == "PARTIAL_2"
         
         # Test SL trigger (1.06% loss - fee adjusted)
+        client.position_scaling_state[symbol]["breakeven_set"] = False
         sl_price = 49470  # 1.06% below entry
         trigger = client.check_tp_sl_triggers(symbol, sl_price)
         assert trigger == "SL"
         
+        # Test break-even SL after first partial
+        client.position_scaling_state[symbol]["breakeven_set"] = True
+        be_price = 49990  # Just below entry
+        trigger = client.check_tp_sl_triggers(symbol, be_price)
+        assert trigger == "SL"
+        
         # Test no trigger (within range)
-        neutral_price = 50500  # 1% above entry
+        neutral_price = 50050  # 0.1% above entry
         trigger = client.check_tp_sl_triggers(symbol, neutral_price)
         assert trigger is None
     
     def test_tp_sl_calculation_short(self):
-        """Test TP/SL trigger calculation for SHORT position with fee adjustment"""
+        """Test Alpha-Apex multi-tier TP/SL calculation for SHORT position"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Add SHORT position
@@ -104,18 +125,33 @@ class TestWEEXv2Client:
             "size": "1.0"
         }
         
-        # Test TP trigger (1.88% drop - fee adjusted)
-        tp_price = 2943.6  # 1.88% below entry
-        trigger = client.check_tp_sl_triggers(symbol, tp_price)
-        assert trigger == "TP"
+        # Test first partial trigger at +0.25% (price drop)
+        partial1_price = 2992.5  # 0.25% below entry
+        trigger = client.check_tp_sl_triggers(symbol, partial1_price)
+        assert trigger == "PARTIAL_1"
         
-        # Test SL trigger (1.06% gain against short - fee adjusted)
+        # Mark first partial taken
+        client.position_scaling_state[symbol] = {
+            "partial_taken": True,
+            "breakeven_set": True,
+            "reinvested": False,
+            "original_size": 1.0,
+            "realized_profit": 0.125
+        }
+        
+        # Test second partial trigger at +0.50%
+        partial2_price = 2985  # 0.50% below entry
+        trigger = client.check_tp_sl_triggers(symbol, partial2_price)
+        assert trigger == "PARTIAL_2"
+        
+        # Test SL trigger (1.06% gain against short)
+        client.position_scaling_state[symbol]["breakeven_set"] = False
         sl_price = 3031.8  # 1.06% above entry
         trigger = client.check_tp_sl_triggers(symbol, sl_price)
         assert trigger == "SL"
         
         # Test no trigger
-        neutral_price = 2985  # 0.5% below entry
+        neutral_price = 2997  # 0.1% below entry
         trigger = client.check_tp_sl_triggers(symbol, neutral_price)
         assert trigger is None
     
@@ -176,17 +212,13 @@ class TestWEEXv2Client:
         """Test candles endpoint uses 'granularity' parameter instead of 'interval'"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Mock successful response
+        # Mock successful response (WEEX V2 returns list directly)
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'code': 0,
-            'success': True,
-            'data': [
-                [1234567890, '50000', '51000', '49000', '50500', '100'],
-                [1234567900, '50500', '51500', '50000', '51000', '150']
-            ]
-        }
+        mock_response.json.return_value = [
+            [1234567890, '50000', '51000', '49000', '50500', '100'],
+            [1234567900, '50500', '51500', '50000', '51000', '150']
+        ]
         mock_get.return_value = mock_response
         
         # Call get_market_klines
@@ -203,6 +235,9 @@ class TestWEEXv2Client:
         # Check URL contains 'granularity' not 'interval'
         assert "granularity=1m" in url
         assert "interval=" not in url
+        # Alpha-Apex: Verify cmt_ prefix is stripped for market data
+        assert "btcusdt" in url.lower()
+        assert "cmt_btcusdt" not in url.lower()
 
 
 class TestAITradingLogger:
