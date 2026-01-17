@@ -155,8 +155,7 @@ class TestWEEXv2Client:
         trigger = client.check_tp_sl_triggers(symbol, neutral_price)
         assert trigger is None
     
-    @patch('core.weex_v2_client.requests.post')
-    def test_set_leverage_endpoint(self, mock_post):
+    def test_set_leverage_endpoint(self):
         """Test leverage endpoint uses correct path and body format"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
@@ -164,30 +163,31 @@ class TestWEEXv2Client:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'code': 0, 'success': True}
-        mock_post.return_value = mock_response
         
-        # Call set_leverage
-        result = client.set_leverage("cmt_btcusdt", 10)
+        # Patch the session.post method instead of requests.post
+        with patch.object(client.session, 'post', return_value=mock_response) as mock_post:
         
-        # Verify result
-        assert result is True
-        
-        # Verify the endpoint was called with correct parameters
-        assert mock_post.called
-        call_args = mock_post.call_args
-        
-        # Check URL contains correct path
-        assert "/capi/v2/account/leverage" in call_args[0][0]
-        
-        # Check body contains marginMode and leverage as string
-        body_data = json.loads(call_args[1]['data'])
-        assert body_data['symbol'] == "cmt_btcusdt"
-        assert body_data['marginMode'] == "isolated"  # Updated for Critical Fix 1
-        assert body_data['leverage'] == "10"
-        assert isinstance(body_data['leverage'], str)
+            # Call set_leverage
+            result = client.set_leverage("cmt_btcusdt", 10)
+            
+            # Verify result
+            assert result is True
+            
+            # Verify the endpoint was called with correct parameters
+            assert mock_post.called
+            call_args = mock_post.call_args
+            
+            # Check URL contains correct path
+            assert "/capi/v2/account/leverage" in call_args[0][0]
+            
+            # Check body contains marginMode and leverage as string
+            body_data = json.loads(call_args[1]['data'])
+            assert body_data['symbol'] == "cmt_btcusdt"
+            assert body_data['marginMode'] == "isolated"  # Updated for Critical Fix 1
+            assert body_data['leverage'] == "10"
+            assert isinstance(body_data['leverage'], str)
     
-    @patch('core.weex_v2_client.requests.post')
-    def test_set_leverage_already_set_handling(self, mock_post):
+    def test_set_leverage_already_set_handling(self):
         """Test 'already set' message is handled as success"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
@@ -199,16 +199,16 @@ class TestWEEXv2Client:
             'message': 'Leverage already set to 10x',
             'success': False
         }
-        mock_post.return_value = mock_response
         
-        # Call set_leverage
-        result = client.set_leverage("cmt_btcusdt", 10)
-        
-        # Should return True (success) for "already set" message
-        assert result is True
+        # Patch the session.post method instead of requests.post
+        with patch.object(client.session, 'post', return_value=mock_response):
+            # Call set_leverage
+            result = client.set_leverage("cmt_btcusdt", 10)
+            
+            # Should return True (success) for "already set" message
+            assert result is True
     
-    @patch('core.weex_v2_client.requests.get')
-    def test_get_klines_granularity_parameter(self, mock_get):
+    def test_get_klines_granularity_parameter(self):
         """Test candles endpoint uses 'granularity' parameter instead of 'interval'"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
@@ -219,25 +219,26 @@ class TestWEEXv2Client:
             [1234567890, '50000', '51000', '49000', '50500', '100'],
             [1234567900, '50500', '51500', '50000', '51000', '150']
         ]
-        mock_get.return_value = mock_response
         
-        # Call get_market_klines
-        klines = client.get_market_klines("cmt_btcusdt", "1m", limit=2)
-        
-        # Verify result
-        assert len(klines) == 2
-        
-        # Verify the endpoint was called with 'granularity' parameter
-        assert mock_get.called
-        call_args = mock_get.call_args
-        url = call_args[0][0]
-        
-        # Check URL contains 'granularity' not 'interval'
-        assert "granularity=1m" in url
-        assert "interval=" not in url
-        # Alpha-Apex: Verify cmt_ prefix is stripped for market data
-        assert "btcusdt" in url.lower()
-        assert "cmt_btcusdt" not in url.lower()
+        # Patch the session.get method instead of requests.get
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Call get_market_klines
+            klines = client.get_market_klines("cmt_btcusdt", "1m", limit=2)
+            
+            # Verify result
+            assert len(klines) == 2
+            
+            # Verify the endpoint was called with 'granularity' parameter
+            assert mock_get.called
+            call_args = mock_get.call_args
+            url = call_args[0][0]
+            
+            # Check URL contains 'granularity' not 'interval'
+            assert "granularity=1m" in url
+            assert "interval=" not in url
+            # Alpha-Apex: Verify cmt_ prefix is stripped for market data
+            assert "btcusdt" in url.lower()
+            assert "cmt_btcusdt" not in url.lower()
 
 
 class TestAITradingLogger:
@@ -411,7 +412,7 @@ class TestCompetitionBotLogic:
         """Test RSI calculation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Test with sample data (trending up)
         closes = [100, 102, 104, 103, 105, 107, 106, 108, 110, 109, 111, 113, 112, 114, 116]
@@ -425,7 +426,7 @@ class TestCompetitionBotLogic:
         """Test SMA calculation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Test with sample data
         closes = [100, 102, 104, 106, 108]
@@ -439,7 +440,7 @@ class TestCompetitionBotLogic:
         """Test BUY signal generation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot(use_llm=False)  # Use RSI/SMA fallback for testing
+        bot = CompetitionTradingBot(use_llm=False, test_mode=True)  # Use RSI/SMA fallback for testing
         
         # Create k-lines data that would suggest BUY (price trending down, RSI oversold)
         klines = []
@@ -465,7 +466,7 @@ class TestCompetitionBotLogic:
         """Test SELL signal generation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot(use_llm=False)  # Use RSI/SMA fallback for testing
+        bot = CompetitionTradingBot(use_llm=False, test_mode=True)  # Use RSI/SMA fallback for testing
         
         # Create k-lines data that would suggest SELL (price trending up, RSI overbought)
         klines = []
@@ -491,7 +492,7 @@ class TestCompetitionBotLogic:
         """Test sentiment string generation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Test neutral sentiment
         indicators = {
@@ -522,7 +523,7 @@ class TestSafetyEnhancements:
         """Test Critical Fix 2: Global exposure calculation"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Mock has_open_position and set open_positions directly
         def mock_has_open_position(symbol):
@@ -545,7 +546,7 @@ class TestSafetyEnhancements:
         """Test exposure calculation with no positions"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         bot.client.open_positions = {}
         
         with patch.object(bot.client, 'get_account_balance', return_value={'availableBalance': '10000'}):
@@ -557,7 +558,7 @@ class TestSafetyEnhancements:
         """Test Enhancement 3: Stale order reaper"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Add a stale order (older than 5 minutes)
         old_time = time.time() - 400  # 400 seconds ago
@@ -578,7 +579,7 @@ class TestSafetyEnhancements:
         """Test Enhancement 6: Volume spike filter with sufficient volume"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Create klines with recent volume spike
         klines = []
@@ -597,7 +598,7 @@ class TestSafetyEnhancements:
         """Test Enhancement 6: Volume spike filter with low volume"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Create klines with low recent volume
         klines = []
@@ -616,7 +617,7 @@ class TestSafetyEnhancements:
         """Test volume spike filter edge cases"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Empty klines - should allow trade
         assert bot.is_volume_spike([], threshold=1.5) is True
@@ -637,7 +638,7 @@ class TestSafetyEnhancements:
         """Test Enhancement 8: Position timeout tracking"""
         from competition_bot import CompetitionTradingBot
         
-        bot = CompetitionTradingBot()
+        bot = CompetitionTradingBot(test_mode=True)
         
         # Track position open time
         symbol = "cmt_btcusdt"
@@ -647,8 +648,7 @@ class TestSafetyEnhancements:
         time_open = time.time() - bot.position_open_times[symbol]
         assert time_open > 3600  # Over 1 hour
     
-    @patch('core.weex_v2_client.requests.post')
-    def test_margin_mode_isolated(self, mock_post):
+    def test_margin_mode_isolated(self):
         """Test Critical Fix 1: Margin mode changed to isolated"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
@@ -656,18 +656,19 @@ class TestSafetyEnhancements:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'code': 0, 'success': True}
-        mock_post.return_value = mock_response
         
-        # Call set_leverage
-        result = client.set_leverage("cmt_btcusdt", 20)
-        
-        # Verify result
-        assert result is True
-        
-        # Verify the endpoint was called with isolated margin mode
-        call_args = mock_post.call_args
-        body_data = json.loads(call_args[1]['data'])
-        assert body_data['marginMode'] == "isolated", "Margin mode should be isolated, not crossed"
+        # Patch the session.post method instead of requests.post
+        with patch.object(client.session, 'post', return_value=mock_response) as mock_post:
+            # Call set_leverage
+            result = client.set_leverage("cmt_btcusdt", 20)
+            
+            # Verify result
+            assert result is True
+            
+            # Verify the endpoint was called with isolated margin mode
+            call_args = mock_post.call_args
+            body_data = json.loads(call_args[1]['data'])
+            assert body_data['marginMode'] == "isolated", "Margin mode should be isolated, not crossed"
 
 
 if __name__ == "__main__":

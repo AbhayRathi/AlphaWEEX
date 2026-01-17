@@ -106,15 +106,16 @@ class CompetitionTradingBot:
     - Safety guardrails
     """
     
-    def __init__(self, use_llm: bool = True):
+    def __init__(self, use_llm: bool = True, test_mode: bool = False):
         """
         Initialize the trading bot
         
         Args:
             use_llm: If True, use LLM strategy. If False, fallback to RSI/SMA (default: True)
+            test_mode: If True, skip API credential validation for testing (default: False)
         """
-        # Validate API credentials
-        if not API_KEY or not API_SECRET or not API_PASSWORD:
+        # Validate API credentials (skip in test mode)
+        if not test_mode and (not API_KEY or not API_SECRET or not API_PASSWORD):
             raise ValueError("Missing API credentials. Please set API_KEY, API_SECRET, and API_PASSWORD in .env")
         
         # Initialize WEEX v2 client
