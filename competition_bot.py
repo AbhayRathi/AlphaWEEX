@@ -83,6 +83,12 @@ VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold du
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 AUTO_FLIP_COOLDOWN_SECONDS = 60  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
 
+# Bi-Directional Trading Enhancements
+SHORT_POSITION_SIZE_REDUCTION = 0.80  # 20% smaller position size for shorts (unlimited risk)
+SELL_SIGNAL_HIGH_CONFIDENCE = 0.78  # Higher confidence required for shorts (was 0.65)
+STRONG_UPTREND_THRESHOLD = 0.02  # 2% - block shorts when SMA50 > SMA200 * 1.02
+MAX_SHORT_HOLD_HOURS = 48  # Maximum hold time for shorts to avoid funding fee erosion
+
 
 class CompetitionTradingBot:
     """
@@ -256,7 +262,7 @@ class CompetitionTradingBot:
             
             # NEW: Smaller size for shorts to account for unlimited risk
             if side == "SELL":
-                position_value *= 0.80  # 20% smaller
+                position_value *= SHORT_POSITION_SIZE_REDUCTION  # 20% smaller
                 logger.info(f"📉 SHORT position sizing: Reduced by 20% for risk management")
             
             qty = position_value / current_price
@@ -642,7 +648,7 @@ class CompetitionTradingBot:
         # Strong overbought = SELL
         elif rsi > 75:
             action = "SELL"
-            confidence = 0.78  # Increased from 0.65 to match risk profile
+            confidence = SELL_SIGNAL_HIGH_CONFIDENCE  # Higher confidence for shorts (0.78)
             reason = f"Strong overbought RSI ({rsi:.1f}) - high confidence short"
         
         # Golden cross = BUY
@@ -660,7 +666,7 @@ class CompetitionTradingBot:
         if action == "SELL":
             uptrend_strength = (sma_50_long - sma_200) / sma_200 if sma_200 > 0 else 0
             
-            if uptrend_strength > 0.02:  # SMA50 is >2% above SMA200 = strong uptrend
+            if uptrend_strength > STRONG_UPTREND_THRESHOLD:  # SMA50 is >2% above SMA200
                 logger.info(f"🚫 Blocking SHORT: Strong uptrend detected (SMA50: {sma_50_long:.2f}, SMA200: {sma_200:.2f}, strength: {uptrend_strength:.2%})")
                 action = "HOLD"
                 confidence = 0.0
@@ -732,7 +738,7 @@ class CompetitionTradingBot:
                         entry_time = self.short_entry_times[symbol]
                         hold_duration_hours = (time.time() - entry_time) / 3600
                         
-                        if hold_duration_hours > 48:  # 48-hour max hold
+                        if hold_duration_hours > MAX_SHORT_HOLD_HOURS:  # 48-hour max hold
                             logger.info(f"⏰ Closing SHORT on {symbol}: Max hold time reached ({hold_duration_hours:.1f}h)")
                             success = self.client.close_position(symbol)
                             

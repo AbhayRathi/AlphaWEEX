@@ -29,6 +29,9 @@ class FundingRateAnalyzer:
     CONFIDENCE_THRESHOLD = 0.5  # Threshold for overriding actions
     EXECUTION_THRESHOLD = 0.65  # Minimum confidence to execute trades
     
+    # Confidence adjustment factors
+    SHORT_CONFIDENCE_BOOST_FACTOR = 0.3  # 30% boost for shorts during extreme positive funding
+    
     def __init__(self):
         """Initialize the funding rate analyzer"""
         logger.info("✅ FundingRateAnalyzer initialized")
@@ -146,7 +149,7 @@ class FundingRateAnalyzer:
             elif original_action == "SELL":
                 adjusted_signal["confidence"] = self._adjust_confidence(
                     original_confidence,
-                    0.3  # Boost by 30%
+                    self.SHORT_CONFIDENCE_BOOST_FACTOR  # Boost by 30%
                 )
                 adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: Over-leveraged longs, prioritizing short entry."
                 logger.info(f"📈 Boosted SHORT confidence from {original_confidence:.2%} to {adjusted_signal['confidence']:.2%} (funding: {funding_rate:.4%})")
