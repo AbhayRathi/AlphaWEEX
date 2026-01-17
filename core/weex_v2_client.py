@@ -52,11 +52,23 @@ class WEEXv2Client:
         # Track open positions for TP/SL management
         self.open_positions: Dict[str, Dict[str, Any]] = {}
         
+        # Alpha-Apex: Track position scaling state
+        # {symbol: {"partial_taken": bool, "breakeven_set": bool, "reinvested": bool, "original_size": float}}
+        self.position_scaling_state: Dict[str, Dict[str, Any]] = {}
+        
+        # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
+        self.session = requests.Session()
+        
         # Precision settings for different symbols
         self.precision_map = {
-            "cmt_btcusdt": 4,  # BTC: 4 decimals
-            "cmt_ethusdt": 3,  # ETH: 3 decimals
-            "cmt_solusdt": 2,  # SOL: 2 decimals
+            "cmt_btcusdt": 4,   # BTC: 4 decimals
+            "cmt_ethusdt": 3,   # ETH: 3 decimals
+            "cmt_solusdt": 2,   # SOL: 2 decimals
+            "cmt_adausdt": 1,   # ADA: 1 decimal
+            "cmt_dogeusdt": 0,  # DOGE: 0 decimals (whole numbers)
+            "cmt_xrpusdt": 1,   # XRP: 1 decimal
+            "cmt_bnbusdt": 3,   # BNB: 3 decimals
+            "cmt_ltcusdt": 2,   # LTC: 2 decimals
         }
     
     def round_qty(self, symbol: str, qty: float) -> float:
@@ -70,7 +82,10 @@ class WEEXv2Client:
         Returns:
             Rounded quantity
         """
-        precision = self.precision_map.get(symbol, 2)  # Default to 2 decimals
+        precision = self.precision_map.get(symbol)
+        if precision is None:
+            logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+            precision = 2
         return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
@@ -133,9 +148,9 @@ class WEEXv2Client:
         
         try:
             if method.upper() == "GET":
-                response = requests.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=10)
             else:
-                response = requests.post(url, headers=headers, data=body_str, timeout=10)
+                response = self.session.post(url, headers=headers, data=body_str, timeout=10)
             
             # Check for 521 error (Firewall block)
             if response.status_code == 521:
@@ -161,8 +176,11 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
+                # Strip cmt_ prefix for market data calls to fix 404 errors
+                market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+                
                 # Map intervals if needed (WEEX expects 1m, 5m, etc.)
-                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+                query_params = f"?symbol={urllib.parse.quote(market_symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
@@ -199,9 +217,12 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
+            # Strip cmt_ prefix for market data calls to fix 404 errors
+            market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+            
             # Updated path to correct WEEX V2 endpoint (removed 'public')
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(market_symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -248,8 +269,11 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
+            # Strip cmt_ prefix for market data calls to fix 404 errors
+            market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+            
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(market_symbol)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -504,15 +528,18 @@ class WEEXv2Client:
     
     def check_tp_sl_triggers(self, symbol: str, current_price: float) -> Optional[str]:
         """
-        Check if TP (2%) or SL (1%) should be triggered for an open position
-        Enhancement 5: Uses fee-adjusted percentages
+        Alpha-Apex: Check multi-tier profit targets and dynamic stop loss
+        - At +0.25% profit: Sell 50% of position and move Stop Loss to break-even
+        - At +0.50% profit: Re-buy 10% of realized profit to "let it ride"
+        - Stop Loss: Initially 1%, then break-even after first target
         
         Args:
             symbol: Trading symbol
             current_price: Current market price
             
         Returns:
-            "TP" if take profit triggered, "SL" if stop loss triggered, None otherwise
+            "PARTIAL_1" for first partial at +0.25%, "PARTIAL_2" for reinvestment at +0.50%, 
+            "SL" if stop loss triggered, None otherwise
         """
         if symbol not in self.open_positions:
             return None
@@ -524,32 +551,74 @@ class WEEXv2Client:
         if entry_price == 0:
             return None
         
-        # Enhancement 5: Fee-adjusted thresholds
-        # EFFECTIVE_TP_PCT = 1.88% (2% - 0.12% fees)
-        # EFFECTIVE_SL_PCT = 1.06% (1% + 0.06% fees)
-        EFFECTIVE_TP_PCT = 1.88
-        EFFECTIVE_SL_PCT = 1.06
+        # Initialize scaling state if needed
+        if symbol not in self.position_scaling_state:
+            original_size = abs(float(position.get('size', 0)))
+            self.position_scaling_state[symbol] = {
+                "partial_taken": False,
+                "breakeven_set": False,
+                "reinvested": False,
+                "original_size": original_size,
+                "realized_profit": 0.0
+            }
+        
+        state = self.position_scaling_state[symbol]
+        
+        # Alpha-Apex targets (fee-adjusted)
+        FIRST_TARGET_PCT = 0.25  # First partial at +0.25%
+        SECOND_TARGET_PCT = 0.50  # Reinvestment trigger at +0.50%
+        INITIAL_SL_PCT = 1.06  # Initial stop loss (1% + fees)
+        BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
         
         # Calculate price change percentage
         price_change_pct = ((current_price - entry_price) / entry_price) * 100
         
         # For LONG positions
         if position_side == "LONG":
-            if price_change_pct >= EFFECTIVE_TP_PCT:
-                logger.info(f"🎯 Take Profit triggered for {symbol}: {price_change_pct:.2f}% gain (fee-adjusted threshold: {EFFECTIVE_TP_PCT}%)")
-                return "TP"
-            elif price_change_pct <= -EFFECTIVE_SL_PCT:
-                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (fee-adjusted threshold: {EFFECTIVE_SL_PCT}%)")
-                return "SL"
+            # Check stop loss
+            if state["breakeven_set"]:
+                # After first partial, SL is at break-even
+                if price_change_pct <= BREAKEVEN_SL_PCT:
+                    logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {price_change_pct:.2f}%")
+                    return "SL"
+            else:
+                # Initial stop loss
+                if price_change_pct <= -INITIAL_SL_PCT:
+                    logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss")
+                    return "SL"
+            
+            # Check profit targets
+            if not state["reinvested"] and state["partial_taken"] and price_change_pct >= SECOND_TARGET_PCT:
+                # Second target: Re-invest 10% of realized profit
+                logger.info(f"🎯 Alpha-Apex: Second target hit for {symbol}: {price_change_pct:.2f}% (re-investment)")
+                return "PARTIAL_2"
+            elif not state["partial_taken"] and price_change_pct >= FIRST_TARGET_PCT:
+                # First target: Take 50% profit, move SL to break-even
+                logger.info(f"🎯 Alpha-Apex: First target hit for {symbol}: {price_change_pct:.2f}% (partial profit)")
+                return "PARTIAL_1"
         
         # For SHORT positions
         elif position_side == "SHORT":
-            if price_change_pct <= -EFFECTIVE_TP_PCT:
-                logger.info(f"🎯 Take Profit triggered for {symbol}: {abs(price_change_pct):.2f}% gain (fee-adjusted threshold: {EFFECTIVE_TP_PCT}%)")
-                return "TP"
-            elif price_change_pct >= EFFECTIVE_SL_PCT:
-                logger.warning(f"🛑 Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (fee-adjusted threshold: {EFFECTIVE_SL_PCT}%)")
-                return "SL"
+            # Invert price change for shorts
+            short_pnl_pct = -price_change_pct
+            
+            # Check stop loss
+            if state["breakeven_set"]:
+                if short_pnl_pct <= BREAKEVEN_SL_PCT:
+                    logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}%")
+                    return "SL"
+            else:
+                if short_pnl_pct <= -INITIAL_SL_PCT:
+                    logger.warning(f"🛑 Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}% loss")
+                    return "SL"
+            
+            # Check profit targets
+            if not state["reinvested"] and state["partial_taken"] and short_pnl_pct >= SECOND_TARGET_PCT:
+                logger.info(f"🎯 Alpha-Apex: Second target hit for {symbol}: {short_pnl_pct:.2f}% (re-investment)")
+                return "PARTIAL_2"
+            elif not state["partial_taken"] and short_pnl_pct >= FIRST_TARGET_PCT:
+                logger.info(f"🎯 Alpha-Apex: First target hit for {symbol}: {short_pnl_pct:.2f}% (partial profit)")
+                return "PARTIAL_1"
         
         return None
     
@@ -576,7 +645,54 @@ class WEEXv2Client:
         if result:
             logger.info(f"✅ Position closed for {symbol}")
             del self.open_positions[symbol]
+            # Clean up scaling state
+            if symbol in self.position_scaling_state:
+                del self.position_scaling_state[symbol]
             return True
         else:
             logger.error(f"❌ Failed to close position for {symbol}")
             return False
+    
+    def close_partial_position(self, symbol: str, percentage: float) -> Optional[Dict[str, Any]]:
+        """
+        Alpha-Apex: Close a partial position (e.g., 50% at first target)
+        
+        Args:
+            symbol: Trading symbol
+            percentage: Percentage of position to close (0.0 to 1.0)
+            
+        Returns:
+            Order result dict or None if failed
+        """
+        if symbol not in self.open_positions:
+            logger.warning(f"⚠️ No position to partially close for {symbol}")
+            return None
+        
+        position = self.open_positions[symbol]
+        total_size = abs(float(position.get('size', 0)))
+        partial_size = total_size * percentage
+        partial_size = self.round_qty(symbol, partial_size)
+        
+        if partial_size <= 0:
+            logger.warning(f"⚠️ Partial size too small for {symbol}: {partial_size}")
+            return None
+        
+        side = "SELL" if position.get('side') == "LONG" else "BUY"
+        
+        logger.info(f"📉 Alpha-Apex: Closing {percentage*100:.0f}% ({partial_size} of {total_size}) for {symbol}")
+        result = self.place_market_order(symbol, side, partial_size, check_spread=False)
+        
+        if result:
+            # Update position size in tracking
+            new_size = total_size - partial_size
+            position['size'] = str(new_size)
+            self.open_positions[symbol] = position
+            logger.info(f"✅ Partial close successful. Remaining size: {new_size}")
+        
+        return result
+    
+    def close_session(self):
+        """Close the persistent HTTP session"""
+        if hasattr(self, 'session'):
+            self.session.close()
+            logger.info("🔌 HTTP session closed")
