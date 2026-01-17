@@ -73,7 +73,11 @@ EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
-MAIN_LOOP_INTERVAL = 30  # Check every 30 seconds
+MAIN_LOOP_INTERVAL = 10  # Check every 10 seconds (Alpha-Apex aggressive mode)
+MIN_CONFIDENCE = 0.75  # Alpha-Apex: Minimum confidence threshold
+RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
+VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
+VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
 
 
 class CompetitionTradingBot:
@@ -428,13 +432,13 @@ class CompetitionTradingBot:
             logger.warning(f"Failed to get behavioral tag: {str(e)}")
             return "NEUTRAL"
     
-    def calculate_rsi(self, closes: List[float], period: int = 14) -> float:
+    def calculate_rsi(self, closes: List[float], period: int = 9) -> float:
         """
-        Calculate RSI indicator
+        Calculate RSI indicator (Alpha-Apex: 9-period for faster signals)
         
         Args:
             closes: List of closing prices
-            period: RSI period (default: 14)
+            period: RSI period (default: 9)
             
         Returns:
             RSI value (0-100)
@@ -674,7 +678,7 @@ class CompetitionTradingBot:
     
     def check_tp_sl_all_symbols(self) -> None:
         """
-        Check TP/SL triggers for all open positions
+        Alpha-Apex: Check multi-tier profit targets and dynamic stop loss for all open positions
         """
         for symbol in SYMBOL_LIST:
             try:
@@ -686,32 +690,115 @@ class CompetitionTradingBot:
                 
                 current_price = float(klines[-1][4])
                 
-                # Check TP/SL
+                # Check TP/SL (now returns PARTIAL_1, PARTIAL_2, SL, or None)
                 trigger = self.client.check_tp_sl_triggers(symbol, current_price)
                 
                 if trigger:
-                    # Get position details for logging
                     position = self.client.open_positions.get(symbol, {})
                     entry_price = float(position.get('entryPrice', 0))
+                    position_side = position.get('side', '').upper()
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
                     
-                    # Log trigger
-                    self.ai_logger.log_tp_sl_trigger(symbol, trigger, entry_price, current_price, pnl_pct)
+                    # Handle Alpha-Apex partial profit taking
+                    if trigger == "PARTIAL_1":
+                        # First target: Take 50% profit, move SL to break-even
+                        logger.info(f"🎯 Alpha-Apex: Taking 50% profit on {symbol} at +0.25%")
+                        partial_result = self.client.close_partial_position(symbol, 0.5)
+                        
+                        if partial_result:
+                            # Mark partial taken and set break-even SL
+                            state = self.client.position_scaling_state[symbol]
+                            state["partial_taken"] = True
+                            state["breakeven_set"] = True
+                            state["realized_profit"] = pnl_pct * 0.5  # 50% of position realized
+                            
+                            self.ai_logger.log_tp_sl_trigger(symbol, "PARTIAL_50%", entry_price, current_price, pnl_pct)
+                            logger.info(f"✅ Break-even stop loss activated for {symbol}")
                     
-                    # Record trade exit in database
-                    self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                    elif trigger == "PARTIAL_2":
+                        # Second target: Re-invest 10% of realized profit
+                        state = self.client.position_scaling_state.get(symbol, {})
+                        realized_profit_pct = state.get("realized_profit", 0)
+                        
+                        if realized_profit_pct > 0:
+                            # Calculate re-investment size (10% of realized profit)
+                            equity = self.get_current_equity()
+                            realized_profit_value = equity * (realized_profit_pct / 100) * 0.5  # 50% of position
+                            reinvest_value = realized_profit_value * 0.10  # 10% of realized profit
+                            reinvest_size = reinvest_value / current_price
+                            reinvest_size = self.client.round_qty(symbol, reinvest_size)
+                            
+                            if reinvest_size > 0:
+                                logger.info(f"📈 Alpha-Apex: Re-investing {reinvest_size} on {symbol} (House Money)")
+                                side = "BUY" if position_side == "LONG" else "SELL"
+                                reinvest_order = self.client.place_market_order(symbol, side, reinvest_size, check_spread=False)
+                                
+                                if reinvest_order:
+                                    state["reinvested"] = True
+                                    self.ai_logger.log_order_execution(
+                                        symbol=symbol,
+                                        side=side,
+                                        size=reinvest_size,
+                                        price=current_price,
+                                        order_id=reinvest_order.get('orderId')
+                                    )
+                                    logger.info(f"✅ House Money re-investment successful for {symbol}")
                     
-                    # Close position
-                    success = self.client.close_position(symbol)
-                    
-                    if success:
-                        self.ai_logger.log_order_execution(
-                            symbol=symbol,
-                            side="CLOSE",
-                            size=abs(float(position.get('size', 0))),
-                            price=current_price,
-                            order_id=None
-                        )
+                    elif trigger == "SL":
+                        # Stop loss hit
+                        self.ai_logger.log_tp_sl_trigger(symbol, trigger, entry_price, current_price, pnl_pct)
+                        self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                        
+                        # Check for Auto-Flip (Trend Reversal)
+                        # If stopped out at break-even and AI shows > 75% opposite confidence, flip
+                        state = self.client.position_scaling_state.get(symbol, {})
+                        is_breakeven = state.get("breakeven_set", False) and abs(pnl_pct) < 0.1
+                        
+                        # Close position
+                        success = self.client.close_position(symbol)
+                        
+                        if success:
+                            self.ai_logger.log_order_execution(
+                                symbol=symbol,
+                                side="CLOSE",
+                                size=abs(float(position.get('size', 0))),
+                                price=current_price,
+                                order_id=None
+                            )
+                            
+                            # Alpha-Apex Auto-Flip: Check for immediate reversal signal
+                            if is_breakeven:
+                                logger.info(f"🔄 Alpha-Apex: Checking for Auto-Flip on {symbol} (stopped at break-even)")
+                                # Get fresh klines for signal
+                                flip_klines = self.client.get_market_klines(symbol, interval='1m', limit=100)
+                                if flip_klines:
+                                    flip_signal = self.generate_signal(flip_klines, symbol)
+                                    
+                                    # Check for strong opposite signal
+                                    opposite_action = "SELL" if position_side == "LONG" else "BUY"
+                                    if flip_signal["action"] == opposite_action and flip_signal["confidence"] >= MIN_CONFIDENCE:
+                                        logger.info(f"🎯 Alpha-Apex Auto-Flip: Entering {opposite_action} on {symbol} (Confidence: {flip_signal['confidence']:.2%})")
+                                        
+                                        # Calculate position size for flip
+                                        flip_size = self.calculate_position_size(symbol, current_price)
+                                        flip_order = self.client.place_market_order(symbol, opposite_action, flip_size, check_spread=True)
+                                        
+                                        if flip_order:
+                                            self.db.record_trade_entry(
+                                                symbol=symbol,
+                                                side=opposite_action,
+                                                price=current_price,
+                                                size=flip_size,
+                                                reasoning=f"Auto-Flip: {flip_signal['reason']}",
+                                                confidence=flip_signal["confidence"],
+                                                ai_reasoning=flip_signal["reason"],
+                                                behavioral_tag="AUTO_FLIP",
+                                                confidence_score=flip_signal["confidence"]
+                                            )
+                                            logger.info(f"✅ Auto-Flip executed successfully for {symbol}")
+            
+            except Exception as e:
+                logger.error(f"Error checking TP/SL for {symbol}: {str(e)}")
             
             except Exception as e:
                 logger.error(f"Error checking TP/SL for {symbol}: {str(e)}")
@@ -745,6 +832,16 @@ class CompetitionTradingBot:
             # 4. Generate signal (LLM or RSI/SMA)
             signal = self.generate_signal(klines, symbol)
             
+            # Alpha-Apex: Volatility bypass check
+            # If 5-minute price change > 0.5%, allow trade at confidence > 0.65
+            volatility_bypass = False
+            if len(klines) >= 5:
+                price_5min_ago = float(klines[-5][4])
+                price_change_5min_pct = abs((current_price - price_5min_ago) / price_5min_ago) * 100
+                if price_change_5min_pct > VOLATILITY_BYPASS_THRESHOLD:
+                    volatility_bypass = True
+                    logger.info(f"⚡ Volatility bypass active for {symbol}: 5-min change {price_change_5min_pct:.2f}% > {VOLATILITY_BYPASS_THRESHOLD}%")
+            
             # 5. Log decision with AI reasoning
             indicators = self.analyze_market(klines) if not self.use_llm else {"current_price": current_price}
             self.ai_logger.log_trade_decision(
@@ -755,8 +852,12 @@ class CompetitionTradingBot:
                 indicators=indicators
             )
             
+            # Alpha-Apex: Determine effective confidence threshold
+            confidence_threshold = VOLATILITY_BYPASS_CONFIDENCE if volatility_bypass else MIN_CONFIDENCE
+            
             # 6. Execute trade if confidence is high enough
-            if signal["action"] == "BUY" and signal["confidence"] >= 0.65:
+            # Alpha-Apex: Support both BUY (Long) and SELL (Short) with confidence >= threshold
+            if signal["action"] == "BUY" and signal["confidence"] >= confidence_threshold:
                 # Enhancement 9: Enhanced logging - Check if position already exists
                 if self.client.has_open_position(symbol):
                     logger.info(f"🚫 Skipping {symbol}: Position already exists")
@@ -816,41 +917,90 @@ class CompetitionTradingBot:
                         order_id=order_id
                     )
             
-            elif signal["action"] == "SELL" and signal["confidence"] >= 0.65:
-                # Enhancement 9: Enhanced logging - Only SELL if we have a position
+            elif signal["action"] == "SELL" and signal["confidence"] >= confidence_threshold:
+                # Alpha-Apex: Enable SHORTING (bi-directional trading)
+                # If no position exists and confidence > threshold, open SHORT position
+                # If LONG position exists, close it
+                
                 if not self.client.has_open_position(symbol):
-                    logger.info(f"🚫 Skipping {symbol}: No open position to sell")
-                    return
-                
-                logger.info(f"🔴 SELL signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
-                
-                # Get position details for P&L calculation
-                position = self.client.open_positions.get(symbol, {})
-                entry_price = float(position.get('entryPrice', current_price))
-                pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
-                
-                # Record trade exit in database
-                self.db.record_trade_exit(symbol, current_price, pnl_pct)
-                
-                # Enhancement 8: Clear position timeout tracking
-                self.position_open_times.pop(symbol, None)
-                
-                success = self.client.close_position(symbol)
-                
-                if success:
-                    position_size = abs(float(position.get('size', 0)))
-                    self.ai_logger.log_order_execution(
-                        symbol=symbol,
-                        side="SELL",
-                        size=position_size,
-                        price=current_price,
-                        order_id=None
-                    )
+                    # Alpha-Apex: Open SHORT position if confidence is high enough
+                    logger.info(f"🔴 SHORT signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
+                    
+                    # Check global exposure limit
+                    current_exposure = self.calculate_total_exposure()
+                    new_position_pct = EQUITY_SIZING_PCT
+                    if current_exposure + new_position_pct > GLOBAL_MAX_EXPOSURE_PCT:
+                        logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
+                        return
+                    
+                    # Check volume spike filter
+                    if not self.is_volume_spike(klines):
+                        logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
+                        return
+                    
+                    # Calculate position size for SHORT
+                    position_size = self.calculate_position_size(symbol, current_price)
+                    
+                    # Place SELL order to open SHORT
+                    order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True)
+                    
+                    if order:
+                        order_id = order.get('orderId')
+                        if order_id:
+                            self.pending_orders[order_id] = {
+                                "symbol": symbol,
+                                "timestamp": time.time(),
+                                "side": "SELL"
+                            }
+                        
+                        self.position_open_times[symbol] = time.time()
+                        
+                        self.db.record_trade_entry(
+                            symbol=symbol,
+                            side="SELL",
+                            price=current_price,
+                            size=position_size,
+                            reasoning=signal["reason"],
+                            confidence=signal["confidence"],
+                            ai_reasoning=signal["reason"],
+                            behavioral_tag=behavioral_tag,
+                            confidence_score=signal["confidence"]
+                        )
+                        
+                        self.ai_logger.log_order_execution(
+                            symbol=symbol,
+                            side="SELL",
+                            size=position_size,
+                            price=current_price,
+                            order_id=order_id
+                        )
+                else:
+                    # Close existing LONG position
+                    logger.info(f"🔴 SELL signal for {symbol}: Closing LONG position")
+                    
+                    position = self.client.open_positions.get(symbol, {})
+                    entry_price = float(position.get('entryPrice', current_price))
+                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                    
+                    self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                    self.position_open_times.pop(symbol, None)
+                    
+                    success = self.client.close_position(symbol)
+                    
+                    if success:
+                        position_size = abs(float(position.get('size', 0)))
+                        self.ai_logger.log_order_execution(
+                            symbol=symbol,
+                            side="SELL",
+                            size=position_size,
+                            price=current_price,
+                            order_id=None
+                        )
             
             elif signal["action"] == "HOLD":
                 # Enhancement 9: Enhanced logging - Low confidence
-                if signal["confidence"] < 0.65:
-                    logger.debug(f"🚫 Skipping {symbol}: Confidence too low ({signal['confidence']:.1%} < 65%)")
+                if signal["confidence"] < confidence_threshold:
+                    logger.debug(f"🚫 Skipping {symbol}: Confidence too low ({signal['confidence']:.1%} < {confidence_threshold:.0%})")
             
             # Enhancement 8: Check position timeout
             if symbol in self.position_open_times:
