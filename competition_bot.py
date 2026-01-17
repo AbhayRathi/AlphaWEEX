@@ -420,7 +420,7 @@ class CompetitionTradingBot:
             current_price = float(klines[-1][4])
             market_data = {
                 'price': current_price,
-                'rsi': self.calculate_rsi([float(k[4]) for k in klines]),
+                'rsi': self.calculate_rsi([float(k[4]) for k in klines], RSI_PERIOD),
                 'volume': float(klines[-1][5]) if len(klines[-1]) > 5 else 0.0,
                 'price_change_pct': ((float(klines[-1][4]) - float(klines[0][4])) / float(klines[0][4]) * 100) if len(klines) > 1 else 0.0
             }
@@ -503,8 +503,8 @@ class CompetitionTradingBot:
         
         current_price = closes[-1]
         
-        # Calculate indicators
-        rsi = self.calculate_rsi(closes)
+        # Calculate indicators (Alpha-Apex: 9-period RSI)
+        rsi = self.calculate_rsi(closes, RSI_PERIOD)
         sma_20 = self.calculate_sma(closes, 20)
         sma_50 = self.calculate_sma(closes, 50)
         
@@ -796,9 +796,6 @@ class CompetitionTradingBot:
                                                 confidence_score=flip_signal["confidence"]
                                             )
                                             logger.info(f"✅ Auto-Flip executed successfully for {symbol}")
-            
-            except Exception as e:
-                logger.error(f"Error checking TP/SL for {symbol}: {str(e)}")
             
             except Exception as e:
                 logger.error(f"Error checking TP/SL for {symbol}: {str(e)}")
