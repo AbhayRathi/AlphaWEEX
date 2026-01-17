@@ -538,8 +538,8 @@ class WEEXv2Client:
             current_price: Current market price
             
         Returns:
-            "TP" if take profit triggered, "SL" if stop loss triggered, 
-            "PARTIAL_1" for first partial, "PARTIAL_2" for reinvestment, None otherwise
+            "PARTIAL_1" for first partial at +0.25%, "PARTIAL_2" for reinvestment at +0.50%, 
+            "SL" if stop loss triggered, None otherwise
         """
         if symbol not in self.open_positions:
             return None

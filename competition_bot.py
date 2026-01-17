@@ -79,6 +79,7 @@ RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
+AUTO_FLIP_COOLDOWN_SECONDS = 60  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
 
 
 class CompetitionTradingBot:
@@ -736,7 +737,8 @@ class CompetitionTradingBot:
                             reinvest_value_usdt = reinvest_size * current_price
                             if reinvest_value_usdt < MIN_ORDER_VALUE_USDT:
                                 logger.info(f"⚠️ Reinvest too small ({reinvest_value_usdt:.2f} USDT < {MIN_ORDER_VALUE_USDT}), skipping")
-                                state["reinvested"] = True  # Mark as done to avoid retry
+                                # Mark as done to prevent repeated attempts (no retry on small orders)
+                                state["reinvested"] = True
                             elif reinvest_size > 0:
                                 logger.info(f"📈 Alpha-Apex: Re-investing {reinvest_size} on {symbol} (House Money)")
                                 side = "BUY" if position_side == "LONG" else "SELL"
@@ -780,8 +782,8 @@ class CompetitionTradingBot:
                                 # Check cooldown to prevent whipsaw
                                 current_time = time.time()
                                 last_flip = self.last_flip_time.get(symbol, 0)
-                                if current_time - last_flip < 60:
-                                    logger.info(f"⏱️ Auto-Flip cooldown active for {symbol} ({60 - (current_time - last_flip):.0f}s remaining)")
+                                if current_time - last_flip < AUTO_FLIP_COOLDOWN_SECONDS:
+                                    logger.info(f"⏱️ Auto-Flip cooldown active for {symbol} ({AUTO_FLIP_COOLDOWN_SECONDS - (current_time - last_flip):.0f}s remaining)")
                                 else:
                                     logger.info(f"🔄 Alpha-Apex: Checking for Auto-Flip on {symbol} (stopped at break-even)")
                                     # Get fresh klines for signal
