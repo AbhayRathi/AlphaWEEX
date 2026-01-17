@@ -141,6 +141,15 @@ class FundingRateAnalyzer:
                     adjusted_signal["reason"] += " | Overridden to HOLD due to extreme positive funding."
                 
                 logger.info(f"🛑 Funding Rate Alert: Restricted LONG trade (funding: {funding_rate:.3f}%)")
+            
+            # NEW: Boost short confidence when funding is extreme positive
+            elif original_action == "SELL":
+                adjusted_signal["confidence"] = self._adjust_confidence(
+                    original_confidence,
+                    0.3  # Boost by 30%
+                )
+                adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: Over-leveraged longs, prioritizing short entry."
+                logger.info(f"📈 Boosted SHORT confidence from {original_confidence:.2%} to {adjusted_signal['confidence']:.2%} (funding: {funding_rate:.4%})")
         
         elif funding_sentiment["signal"] == "PRIORITIZE_LONG":
             # Prioritize long trades
