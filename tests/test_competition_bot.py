@@ -177,15 +177,16 @@ class TestWEEXv2Client:
             assert mock_post.called
             call_args = mock_post.call_args
             
-            # Check URL contains correct path
-            assert "/capi/v2/account/leverage" in call_args[0][0]
+            # Check URL contains correct path (updated to setLeverage)
+            assert "/capi/v2/account/setLeverage" in call_args[0][0]
             
-            # Check body contains marginMode and leverage as string
+            # Check body contains marginMode as integer and leverage as integer
             body_data = json.loads(call_args[1]['data'])
             assert body_data['symbol'] == "cmt_btcusdt"
-            assert body_data['marginMode'] == "isolated"  # Updated for Critical Fix 1
-            assert body_data['leverage'] == "10"
-            assert isinstance(body_data['leverage'], str)
+            assert body_data['marginMode'] == 1  # Integer: 1 for Isolated
+            assert body_data['leverage'] == 10
+            assert isinstance(body_data['marginMode'], int)
+            assert isinstance(body_data['leverage'], int)
     
     def test_set_leverage_already_set_handling(self):
         """Test 'already set' message is handled as success"""
@@ -882,7 +883,7 @@ class TestSafetyEnhancements:
         assert time_open > 3600  # Over 1 hour
     
     def test_margin_mode_isolated(self):
-        """Test Critical Fix 1: Margin mode changed to isolated"""
+        """Test Critical Fix: Margin mode is integer 1 for isolated"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -898,10 +899,11 @@ class TestSafetyEnhancements:
             # Verify result
             assert result is True
             
-            # Verify the endpoint was called with isolated margin mode
+            # Verify the endpoint was called with isolated margin mode (integer 1)
             call_args = mock_post.call_args
             body_data = json.loads(call_args[1]['data'])
-            assert body_data['marginMode'] == "isolated", "Margin mode should be isolated, not crossed"
+            assert body_data['marginMode'] == 1, "Margin mode should be integer 1 for isolated"
+            assert isinstance(body_data['marginMode'], int), "Margin mode should be integer type"
 
 
 if __name__ == "__main__":
