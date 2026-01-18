@@ -857,6 +857,28 @@ class CompetitionTradingBot:
                         realized_profit_pct = state.get("realized_profit", 0)
                         
                         if realized_profit_pct > 0:
+                            # Get AI reasoning for journal
+                            ai_reason = "Second profit target reached - reinvestment trigger"
+                            try:
+                                recent_trades = self.db.get_all_trades(limit=50)
+                                for trade in recent_trades:
+                                    if trade.get('symbol') == symbol and trade.get('exit_price') is None:
+                                        ai_reason = trade.get('ai_reasoning') or trade.get('reasoning', ai_reason)
+                                        break
+                            except Exception as e:
+                                logger.debug(f"Could not retrieve AI reasoning: {str(e)}")
+                            
+                            # Write to journal (tracking the milestone, not a position close)
+                            self.trade_journal.append_trade(
+                                symbol=symbol,
+                                direction=position_side,
+                                profit_loss=pnl_pct,  # Current unrealized P&L
+                                ai_reason=ai_reason,
+                                entry_price=entry_price,
+                                exit_price=current_price,
+                                trigger_type="PARTIAL_2"
+                            )
+                            
                             # Calculate re-investment size (10% of realized profit)
                             equity = self.get_current_equity()
                             realized_profit_value = equity * (realized_profit_pct / 100) * 0.5  # 50% of position
