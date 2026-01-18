@@ -192,22 +192,18 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Normalization: remove cmt_ prefix and convert to uppercase for public endpoints
-                transformed_symbol = symbol.replace('cmt_', '').upper()
+                # Use the symbol as-is (do not transform for market data endpoints)
+                # The cmt_ prefix should be preserved for competition trading symbols
+                logger.debug(f"Requesting klines for symbol: {symbol}")
                 
-                # DEBUG print for verification
-                print(f"DEBUG: Requesting Klines with symbol: {transformed_symbol}")
-                logger.debug(f"Fetching data for transformed symbol: {transformed_symbol}")
-                
-                # Try with plain uppercase version first
-                query_params = f"?symbol={urllib.parse.quote(transformed_symbol)}&granularity={interval}&limit={limit}"
+                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # FIX: WEEX V2 Contract API returns a list directly [[...], [...]]
+                    # WEEX V2 Contract API returns a list directly [[...], [...]]
                     if isinstance(data, list):
                         logger.info(f"✅ Retrieved {len(data)} candles for {symbol}")
                         return data
@@ -218,28 +214,8 @@ class WEEXv2Client:
                         logger.error(f"❌ Unexpected response format for {symbol}: {data}")
                         return []
                 else:
-                    # Suffix Check: If plain uppercase fails, try with _SPBL suffix
-                    logger.warning(f"⚠️ HTTP {response.status_code} for {transformed_symbol}, trying with _SPBL suffix")
-                    transformed_symbol_spbl = transformed_symbol + "_SPBL"
-                    print(f"DEBUG: Requesting Klines with symbol: {transformed_symbol_spbl}")
-                    
-                    query_params_spbl = f"?symbol={urllib.parse.quote(transformed_symbol_spbl)}&granularity={interval}&limit={limit}"
-                    response = self.send_weex_request("GET", path, query_params_spbl)
-                    
-                    if response.status_code == 200:
-                        data = response.json()
-                        
-                        if isinstance(data, list):
-                            logger.info(f"✅ Retrieved {len(data)} candles for {symbol} using _SPBL suffix")
-                            return data
-                        elif isinstance(data, dict) and data.get('code') == '00000':
-                            return data.get('data', [])
-                        else:
-                            logger.error(f"❌ Unexpected response format for {symbol}: {data}")
-                            return []
-                    else:
-                        logger.error(f"❌ HTTP {response.status_code} (with _SPBL): {response.text}")
-                        return []
+                    logger.error(f"❌ HTTP {response.status_code} for {symbol}: {response.text}")
+                    return []
                     
             except Exception as e:
                 logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
@@ -257,14 +233,12 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
-            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
-            formatted_symbol = symbol.replace('cmt_', '').upper()
-            
-            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
+            # Use the symbol as-is (do not transform for market data endpoints)
+            logger.debug(f"Fetching funding rate for symbol: {symbol}")
             
             # Updated path to correct WEEX V2 endpoint (removed 'public')
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -311,13 +285,11 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
-            formatted_symbol = symbol.replace('cmt_', '').upper()
-            
-            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
+            # Use the symbol as-is (do not transform for market data endpoints)
+            logger.debug(f"Fetching order book for symbol: {symbol}")
             
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -351,13 +323,11 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
-            formatted_symbol = symbol.replace('cmt_', '').upper()
-            
-            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
+            # Use the symbol as-is (do not transform for market data endpoints)
+            logger.debug(f"Fetching ticker for symbol: {symbol}")
             
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
