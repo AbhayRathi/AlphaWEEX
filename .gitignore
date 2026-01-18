@@ -45,6 +45,8 @@ data/demo_*.db
 data/test_*.db
 data/prompts/
 data/demo_prompts/
+data/trade_history.json
+data/active_positions.json
 *.db
 *.db-journal
 trading_memory.db
