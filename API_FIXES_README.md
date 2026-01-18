@@ -106,7 +106,8 @@ These fixes resolve:
 - `core/weex_v2_client.py` - Core API client with endpoint fixes and logging
 - `tests/test_competition_bot.py` - Updated tests to verify new endpoints
 - `API_FIXES_README.md` - Documentation updated for AI Wars Competition
-- `tests/test_competition_bot.py` - Added comprehensive tests for new behavior
+- `COMPETITION_BOT_README.md` - Updated endpoint documentation
+- `validate_api_fixes.py` - Updated validation script for new endpoints
 
 ## No Breaking Changes
 
