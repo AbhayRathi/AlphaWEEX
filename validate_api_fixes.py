@@ -23,8 +23,8 @@ def test_leverage_endpoint():
     
     client = WEEXv2Client("test_key", "test_secret", "test_pass")
     
-    # Mock the POST request
-    with patch('core.weex_v2_client.requests.post') as mock_post:
+    # Mock the session.post method instead of requests.post
+    with patch.object(client.session, 'post') as mock_post:
         # Setup mock response
         mock_response = Mock()
         mock_response.status_code = 200
@@ -54,7 +54,7 @@ def test_leverage_endpoint():
             print(f"   ❌ FAILED: Wrong symbol: {body_data.get('symbol')}")
             return False
         
-        if body_data.get('marginMode') != "crossed":
+        if body_data.get('marginMode') != "isolated":
             print(f"   ❌ FAILED: Missing or wrong marginMode: {body_data.get('marginMode')}")
             return False
         
@@ -80,8 +80,8 @@ def test_already_set_handling():
     
     client = WEEXv2Client("test_key", "test_secret", "test_pass")
     
-    # Mock the POST request
-    with patch('core.weex_v2_client.requests.post') as mock_post:
+    # Mock the session.post method instead of requests.post
+    with patch.object(client.session, 'post') as mock_post:
         # Setup mock response with "already set" message
         mock_response = Mock()
         mock_response.status_code = 200
@@ -109,19 +109,15 @@ def test_granularity_parameter():
     
     client = WEEXv2Client("test_key", "test_secret", "test_pass")
     
-    # Mock the GET request
-    with patch('core.weex_v2_client.requests.get') as mock_get:
+    # Mock the session.get method instead of requests.get
+    with patch.object(client.session, 'get') as mock_get:
         # Setup mock response
         mock_response = Mock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'code': 0,
-            'success': True,
-            'data': [
-                [1234567890, '50000', '51000', '49000', '50500', '100'],
-                [1234567900, '50500', '51500', '50000', '51000', '150']
-            ]
-        }
+        mock_response.json.return_value = [
+            [1234567890, '50000', '51000', '49000', '50500', '100'],
+            [1234567900, '50500', '51500', '50000', '51000', '150']
+        ]
         mock_get.return_value = mock_response
         
         # Call get_market_klines

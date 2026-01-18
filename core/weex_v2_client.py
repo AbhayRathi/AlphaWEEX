@@ -192,13 +192,15 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
-                formatted_symbol = symbol.replace('cmt_', '').upper()
+                # Normalization: remove cmt_ prefix and convert to uppercase for public endpoints
+                transformed_symbol = symbol.replace('cmt_', '').upper()
                 
-                logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
+                # DEBUG print for verification
+                print(f"DEBUG: Requesting Klines with symbol: {transformed_symbol}")
+                logger.debug(f"Fetching data for transformed symbol: {transformed_symbol}")
                 
-                # Map intervals if needed (WEEX expects 1m, 5m, etc.)
-                query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}&granularity={interval}&limit={limit}"
+                # Try with plain uppercase version first
+                query_params = f"?symbol={urllib.parse.quote(transformed_symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
@@ -216,8 +218,28 @@ class WEEXv2Client:
                         logger.error(f"❌ Unexpected response format for {symbol}: {data}")
                         return []
                 else:
-                    logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                    return []
+                    # Suffix Check: If plain uppercase fails, try with _SPBL suffix
+                    logger.warning(f"⚠️ HTTP {response.status_code} for {transformed_symbol}, trying with _SPBL suffix")
+                    transformed_symbol_spbl = transformed_symbol + "_SPBL"
+                    print(f"DEBUG: Requesting Klines with symbol: {transformed_symbol_spbl}")
+                    
+                    query_params_spbl = f"?symbol={urllib.parse.quote(transformed_symbol_spbl)}&granularity={interval}&limit={limit}"
+                    response = self.send_weex_request("GET", path, query_params_spbl)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        if isinstance(data, list):
+                            logger.info(f"✅ Retrieved {len(data)} candles for {symbol} using _SPBL suffix")
+                            return data
+                        elif isinstance(data, dict) and data.get('code') == '00000':
+                            return data.get('data', [])
+                        else:
+                            logger.error(f"❌ Unexpected response format for {symbol}: {data}")
+                            return []
+                    else:
+                        logger.error(f"❌ HTTP {response.status_code} (with _SPBL): {response.text}")
+                        return []
                     
             except Exception as e:
                 logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
