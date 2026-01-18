@@ -471,7 +471,7 @@ class TestCompetitionBotIntegration:
         # Change to temp directory for database
         os.chdir(tmp_path)
         
-        bot = CompetitionTradingBot(use_llm=True)
+        bot = CompetitionTradingBot(use_llm=True, test_mode=True)
         
         assert bot.use_llm is True
         assert bot.strategy_engine is not None
@@ -484,7 +484,7 @@ class TestCompetitionBotIntegration:
         # Change to temp directory for database
         os.chdir(tmp_path)
         
-        bot = CompetitionTradingBot(use_llm=False)
+        bot = CompetitionTradingBot(use_llm=False, test_mode=True)
         
         assert bot.use_llm is False
         assert bot.db is not None
@@ -496,7 +496,7 @@ class TestCompetitionBotIntegration:
         # Change to temp directory for database
         os.chdir(tmp_path)
         
-        bot = CompetitionTradingBot(use_llm=False)
+        bot = CompetitionTradingBot(use_llm=False, test_mode=True)
         
         # Get health check
         health = bot.health_check()
