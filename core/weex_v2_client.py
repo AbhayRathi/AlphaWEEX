@@ -178,6 +178,15 @@ class WEEXv2Client:
             """
             Get K-lines (candlestick) data from WEEX
             Endpoint: GET /capi/v2/market/candles
+            
+            Args:
+                symbol: Trading symbol (e.g., "cmt_btcusdt")
+                interval: Time interval (default: '1m'). Valid values: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+                limit: Number of candles to retrieve (default: 100)
+                
+            Returns:
+                List of candle data arrays [[timestamp, open, high, low, close, volume], ...]
+                Empty list if request fails
             """
             try:
                 import urllib.parse
