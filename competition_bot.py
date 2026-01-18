@@ -23,6 +23,8 @@ from core.ai_logger import AITradingLogger
 from core.db import DatabaseManager
 from core.strategy_engine import StrategyEngine
 from core.funding_rate_analyzer import FundingRateAnalyzer
+from core.trade_journal import TradeJournal
+from core.position_state import PositionStatePersistence
 
 # Load environment variables
 load_dotenv()
@@ -129,6 +131,21 @@ class CompetitionTradingBot:
         
         # Initialize funding rate analyzer
         self.funding_analyzer = FundingRateAnalyzer()
+        
+        # Initialize trade journal for persistent trade memory
+        self.trade_journal = TradeJournal("data/trade_history.json")
+        
+        # Initialize position state persistence
+        self.position_state = PositionStatePersistence("data/active_positions.json")
+        
+        # Load saved position state on startup
+        saved_state = self.position_state.load_state()
+        if saved_state:
+            self.client.position_scaling_state = saved_state
+            logger.info(f"📂 Restored {len(saved_state)} position states from disk")
+        
+        # Track last state save time
+        self.last_state_save_time = time.time()
         
         # Initialize strategy engine (LLM or fallback)
         self.use_llm = use_llm
@@ -240,6 +257,15 @@ class CompetitionTradingBot:
         except Exception as e:
             logger.error(f"Failed to get equity: {str(e)}")
             return 1000.0
+    
+    def save_position_state(self) -> None:
+        """
+        Save position scaling state to disk for persistence
+        """
+        try:
+            self.position_state.save_state(self.client.position_scaling_state)
+        except Exception as e:
+            logger.error(f"Failed to save position state: {str(e)}")
     
     def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20, side: str = "BUY") -> float:
         """
@@ -752,6 +778,28 @@ class CompetitionTradingBot:
                                 pnl_pct = -((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
                                 self.db.record_trade_exit(symbol, current_price, pnl_pct)
                                 
+                                # Get AI reasoning for journal
+                                ai_reason = "Max hold time reached for SHORT"
+                                try:
+                                    recent_trades = self.db.get_all_trades(limit=50)
+                                    for trade in recent_trades:
+                                        if trade.get('symbol') == symbol and trade.get('exit_price') is None:
+                                            ai_reason = trade.get('ai_reasoning') or trade.get('reasoning', ai_reason)
+                                            break
+                                except Exception as e:
+                                    logger.debug(f"Could not retrieve AI reasoning: {str(e)}")
+                                
+                                # Write to journal
+                                self.trade_journal.append_trade(
+                                    symbol=symbol,
+                                    direction="SHORT",
+                                    profit_loss=pnl_pct,
+                                    ai_reason=ai_reason,
+                                    entry_price=entry_price,
+                                    exit_price=current_price,
+                                    trigger_type="MAX_HOLD"
+                                )
+                                
                                 self.ai_logger.log_tp_sl_trigger(symbol, "MAX_HOLD_TIME", entry_price, current_price, pnl_pct)
                             continue
                 
@@ -778,6 +826,29 @@ class CompetitionTradingBot:
                             state["realized_profit"] = pnl_pct * 0.5  # 50% of position realized
                             
                             self.ai_logger.log_tp_sl_trigger(symbol, "PARTIAL_50%", entry_price, current_price, pnl_pct)
+                            
+                            # Get AI reasoning for journal
+                            ai_reason = "Partial profit target reached"
+                            try:
+                                recent_trades = self.db.get_all_trades(limit=50)
+                                for trade in recent_trades:
+                                    if trade.get('symbol') == symbol and trade.get('exit_price') is None:
+                                        ai_reason = trade.get('ai_reasoning') or trade.get('reasoning', ai_reason)
+                                        break
+                            except Exception as e:
+                                logger.debug(f"Could not retrieve AI reasoning: {str(e)}")
+                            
+                            # Write partial profit to journal
+                            self.trade_journal.append_trade(
+                                symbol=symbol,
+                                direction=position_side,
+                                profit_loss=pnl_pct * 0.5,  # 50% of position
+                                ai_reason=ai_reason,
+                                entry_price=entry_price,
+                                exit_price=current_price,
+                                trigger_type="PARTIAL_1"
+                            )
+                            
                             logger.info(f"✅ Break-even stop loss activated for {symbol}")
                     
                     elif trigger == "PARTIAL_2":
@@ -819,6 +890,29 @@ class CompetitionTradingBot:
                         # Stop loss hit
                         self.ai_logger.log_tp_sl_trigger(symbol, trigger, entry_price, current_price, pnl_pct)
                         self.db.record_trade_exit(symbol, current_price, pnl_pct)
+                        
+                        # Get AI reasoning from most recent trade entry
+                        ai_reason = "Stop loss triggered"
+                        try:
+                            # Query recent trades for AI reasoning
+                            recent_trades = self.db.get_all_trades(limit=50)
+                            for trade in recent_trades:
+                                if trade.get('symbol') == symbol and trade.get('exit_price') is None:
+                                    ai_reason = trade.get('ai_reasoning') or trade.get('reasoning', ai_reason)
+                                    break
+                        except Exception as e:
+                            logger.debug(f"Could not retrieve AI reasoning: {str(e)}")
+                        
+                        # Write to trade journal
+                        self.trade_journal.append_trade(
+                            symbol=symbol,
+                            direction=position_side,
+                            profit_loss=pnl_pct,
+                            ai_reason=ai_reason,
+                            entry_price=entry_price,
+                            exit_price=current_price,
+                            trigger_type="SL"
+                        )
                         
                         # Check for Auto-Flip (Trend Reversal)
                         # If stopped out at break-even and AI shows > 75% opposite confidence, flip
@@ -1088,6 +1182,28 @@ class CompetitionTradingBot:
                     self.db.record_trade_exit(symbol, current_price, pnl_pct)
                     self.position_open_times.pop(symbol, None)
                     
+                    # Get AI reasoning for journal
+                    ai_reason = "Full position close - opposite signal"
+                    try:
+                        recent_trades = self.db.get_all_trades(limit=50)
+                        for trade in recent_trades:
+                            if trade.get('symbol') == symbol and trade.get('exit_price') is None:
+                                ai_reason = trade.get('ai_reasoning') or trade.get('reasoning', ai_reason)
+                                break
+                    except Exception as e:
+                        logger.debug(f"Could not retrieve AI reasoning: {str(e)}")
+                    
+                    # Write full close to journal
+                    self.trade_journal.append_trade(
+                        symbol=symbol,
+                        direction="LONG",
+                        profit_loss=pnl_pct,
+                        ai_reason=ai_reason,
+                        entry_price=entry_price,
+                        exit_price=current_price,
+                        trigger_type="FULL_TP"
+                    )
+                    
                     success = self.client.close_position(symbol)
                     
                     if success:
@@ -1184,6 +1300,12 @@ class CompetitionTradingBot:
                 
                 # Check TP/SL for all positions
                 self.check_tp_sl_all_symbols()
+                
+                # Save position state every 10 seconds if needed
+                current_time = time.time()
+                if current_time - self.last_state_save_time >= 10:
+                    self.save_position_state()
+                    self.last_state_save_time = current_time
                 
                 # Process each symbol
                 for symbol in SYMBOL_LIST:
