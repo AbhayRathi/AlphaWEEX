@@ -16,6 +16,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Import TradeJournal for persistent trade memory
+try:
+    from core.trade_journal import TradeJournal
+    TRADE_JOURNAL_AVAILABLE = True
+except ImportError:
+    TRADE_JOURNAL_AVAILABLE = False
+    logger.warning("TradeJournal not available")
+
 # Optional imports for LLM providers
 try:
     import openai
@@ -224,6 +232,15 @@ class StrategyEngine:
         from core.funding_rate_analyzer import FundingRateAnalyzer
         self.funding_analyzer = FundingRateAnalyzer()
         
+        # Initialize trade journal for persistent trade memory
+        self.trade_journal = None
+        if TRADE_JOURNAL_AVAILABLE:
+            try:
+                self.trade_journal = TradeJournal()
+                logger.info("✅ Trade journal initialized for LLM context")
+            except Exception as e:
+                logger.warning(f"Failed to initialize trade journal: {str(e)}")
+        
         # Token usage tracking
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -317,6 +334,40 @@ Recent Trades:
         
         return history
     
+    def _format_journal_trades(self) -> str:
+        """
+        Format recent trades from journal for LLM prompt
+        
+        Returns:
+            Formatted string with last 5 trades from journal
+        """
+        if not self.trade_journal:
+            return ""
+        
+        try:
+            recent_trades = self.trade_journal.get_recent_trades(limit=5)
+            
+            if not recent_trades:
+                return ""
+            
+            journal_history = "\n[Last 5 Trade Results from Journal]:\n"
+            for i, trade in enumerate(recent_trades, 1):
+                symbol = trade.get('symbol', 'N/A')
+                direction = trade.get('direction', 'N/A')
+                pnl = trade.get('profit_loss', 0.0)
+                reason = trade.get('ai_reason', 'No reason provided')
+                trigger = trade.get('trigger_type', 'N/A')
+                
+                # Truncate reason to keep prompt concise
+                short_reason = reason[:50] + "..." if len(reason) > 50 else reason
+                
+                journal_history += f"{i}. {direction} {symbol}: {pnl:+.2f}% ({trigger}) - {short_reason}\n"
+            
+            return journal_history
+        except Exception as e:
+            logger.warning(f"Failed to format journal trades: {str(e)}")
+            return ""
+    
     def _build_prompt(self, symbol: str, klines: List[List], 
                      performance: Dict[str, Any], balance: float = 1000.0,
                      leverage: int = 20, current_price: float = 0.0,
@@ -338,6 +389,7 @@ Recent Trades:
         """
         candles_data = self._format_candles_data(klines)
         trade_history = self._format_trade_history(performance)
+        journal_trades = self._format_journal_trades()
         
         # Get behavioral psychology tags from BehavioralAdversary if available
         behavioral_tags = "No behavioral analysis available"
@@ -375,6 +427,7 @@ DATA:
 
 [Past Perf]:
 {trade_history}
+{journal_trades}
 
 TASK:
 Analyze the data and make a trading decision. Consider:
