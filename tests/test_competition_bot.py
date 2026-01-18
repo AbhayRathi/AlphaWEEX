@@ -396,6 +396,63 @@ class TestAITradingLogger:
         assert stats["order_executions"] == 1
         assert stats["tp_triggers"] == 1
         assert stats["errors"] == 1
+    
+    def test_log_decision_with_reasoning(self, temp_log_file):
+        """Test new log_decision method with reasoning"""
+        logger = AITradingLogger(temp_log_file)
+        
+        # Log a decision with reasoning
+        logger.log_decision(
+            symbol="cmt_btcusdt",
+            decision="BUY",
+            confidence=0.85,
+            reason="RSI oversold at 28 and high funding rate suggests short squeeze"
+        )
+        
+        # Read log file
+        with open(temp_log_file, 'r') as f:
+            log_line = f.readline().strip()
+        
+        # Should be valid JSON
+        log_entry = json.loads(log_line)
+        
+        assert log_entry["type"] == "AI_DECISION"
+        assert log_entry["symbol"] == "cmt_btcusdt"
+        assert log_entry["decision"] == "BUY"
+        assert log_entry["confidence"] == 0.85
+        assert log_entry["reason"] == "RSI oversold at 28 and high funding rate suggests short squeeze"
+        assert "timestamp" in log_entry
+    
+    def test_log_decision_for_all_actions(self, temp_log_file):
+        """Test log_decision works for HOLD, BUY, and SELL decisions"""
+        logger = AITradingLogger(temp_log_file)
+        
+        # Test all decision types
+        decisions = [
+            ("BUY", "Strong bullish momentum"),
+            ("SELL", "Overbought conditions detected"),
+            ("HOLD", "Neutral market conditions")
+        ]
+        
+        for decision, reason in decisions:
+            logger.log_decision(
+                symbol="cmt_ethusdt",
+                decision=decision,
+                confidence=0.75,
+                reason=reason
+            )
+        
+        # Read all log entries
+        with open(temp_log_file, 'r') as f:
+            lines = f.readlines()
+        
+        assert len(lines) == 3
+        
+        # Verify each entry
+        for i, (expected_decision, expected_reason) in enumerate(decisions):
+            log_entry = json.loads(lines[i].strip())
+            assert log_entry["decision"] == expected_decision
+            assert log_entry["reason"] == expected_reason
 
 
 class TestCompetitionBotLogic:
