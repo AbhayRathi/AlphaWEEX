@@ -178,16 +178,27 @@ class WEEXv2Client:
             """
             Get K-lines (candlestick) data from WEEX
             Endpoint: GET /capi/v2/market/candles
+            
+            Args:
+                symbol: Trading symbol (e.g., "cmt_btcusdt")
+                interval: Time interval (default: '1m'). Valid values: 1m, 5m, 15m, 30m, 1h, 4h, 1d
+                limit: Number of candles to retrieve (default: 100)
+                
+            Returns:
+                List of candle data arrays [[timestamp, open, high, low, close, volume], ...]
+                Empty list if request fails
             """
             try:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Strip cmt_ prefix for market data calls to fix 404 errors
-                market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+                # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
+                formatted_symbol = symbol.replace('cmt_', '').upper()
+                
+                logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
                 
                 # Map intervals if needed (WEEX expects 1m, 5m, etc.)
-                query_params = f"?symbol={urllib.parse.quote(market_symbol)}&granularity={interval}&limit={limit}"
+                query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
@@ -224,12 +235,14 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
-            # Strip cmt_ prefix for market data calls to fix 404 errors
-            market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
+            formatted_symbol = symbol.replace('cmt_', '').upper()
+            
+            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
             
             # Updated path to correct WEEX V2 endpoint (removed 'public')
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(market_symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -276,11 +289,13 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Strip cmt_ prefix for market data calls to fix 404 errors
-            market_symbol = symbol.replace('cmt_', '') if symbol.startswith('cmt_') else symbol
+            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
+            formatted_symbol = symbol.replace('cmt_', '').upper()
+            
+            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
             
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(market_symbol)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -299,6 +314,46 @@ class WEEXv2Client:
                 
         except Exception as e:
             logger.error(f"Failed to get order book for {symbol}: {str(e)}")
+            return None
+    
+    def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get ticker (24h stats) from WEEX
+        Endpoint: GET /capi/v2/market/ticker
+        
+        Args:
+            symbol: Trading symbol (e.g., "cmt_btcusdt")
+            
+        Returns:
+            Dictionary with ticker data (last price, 24h volume, etc.), or None if failed
+        """
+        try:
+            import urllib.parse
+            # Format symbol: remove cmt_ prefix and convert to uppercase for public endpoints
+            formatted_symbol = symbol.replace('cmt_', '').upper()
+            
+            logger.debug(f"Fetching data for formatted symbol: {formatted_symbol}")
+            
+            path = "/capi/v2/market/ticker"
+            query_params = f"?symbol={urllib.parse.quote(formatted_symbol)}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == 0 or data.get('success'):
+                    ticker_data = data.get('data', {})
+                    logger.debug(f"✅ Retrieved ticker for {symbol}")
+                    return ticker_data
+                else:
+                    logger.error(f"❌ Ticker error: {data.get('message', 'Unknown error')}")
+                    return None
+            else:
+                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get ticker for {symbol}: {str(e)}")
             return None
     
     def _extract_price_from_order(self, order: Any) -> float:

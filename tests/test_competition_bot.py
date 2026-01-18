@@ -236,9 +236,106 @@ class TestWEEXv2Client:
             # Check URL contains 'granularity' not 'interval'
             assert "granularity=1m" in url
             assert "interval=" not in url
-            # Alpha-Apex: Verify cmt_ prefix is stripped for market data
-            assert "btcusdt" in url.lower()
-            assert "cmt_btcusdt" not in url.lower()
+            # Verify cmt_ prefix is stripped and symbol is uppercase for market data
+            assert "BTCUSDT" in url
+            assert "cmt_" not in url.lower()
+    
+    def test_get_order_book_symbol_format(self):
+        """Test order book endpoint uses uppercase symbol without cmt_ prefix"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'code': 0,
+            'success': True,
+            'data': {
+                'bids': [['50000', '1.0']],
+                'asks': [['50100', '1.0']]
+            }
+        }
+        
+        # Patch the session.get method
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Call get_order_book with cmt_ prefix
+            order_book = client.get_order_book("cmt_btcusdt", depth=5)
+            
+            # Verify result
+            assert order_book is not None
+            
+            # Verify the endpoint was called with correct URL
+            assert mock_get.called
+            call_args = mock_get.call_args
+            url = call_args[0][0]
+            
+            # Verify symbol is uppercase and cmt_ prefix is removed
+            assert "BTCUSDT" in url
+            assert "cmt_" not in url.lower()
+            assert "depth=5" in url
+    
+    def test_get_ticker_symbol_format(self):
+        """Test ticker endpoint uses uppercase symbol without cmt_ prefix"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'code': 0,
+            'success': True,
+            'data': {
+                'lastPrice': '50000',
+                'volume24h': '10000',
+                'high24h': '51000',
+                'low24h': '49000'
+            }
+        }
+        
+        # Patch the session.get method
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Call get_ticker with cmt_ prefix
+            ticker = client.get_ticker("cmt_ethusdt")
+            
+            # Verify result
+            assert ticker is not None
+            assert ticker.get('lastPrice') == '50000'
+            
+            # Verify the endpoint was called with correct URL
+            assert mock_get.called
+            call_args = mock_get.call_args
+            url = call_args[0][0]
+            
+            # Verify symbol is uppercase and cmt_ prefix is removed
+            assert "ETHUSDT" in url
+            assert "cmt_" not in url.lower()
+    
+    def test_symbol_format_already_uppercase(self):
+        """Test symbol formatting handles already uppercase symbols"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            [1234567890, '50000', '51000', '49000', '50500', '100']
+        ]
+        
+        # Patch the session.get method
+        with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
+            # Call with already uppercase symbol (no cmt_ prefix)
+            klines = client.get_market_klines("BTCUSDT", "1m", limit=1)
+            
+            # Verify result
+            assert len(klines) == 1
+            
+            # Verify the endpoint was called with correct URL
+            assert mock_get.called
+            call_args = mock_get.call_args
+            url = call_args[0][0]
+            
+            # Should still have uppercase symbol
+            assert "BTCUSDT" in url
 
 
 class TestAITradingLogger:
