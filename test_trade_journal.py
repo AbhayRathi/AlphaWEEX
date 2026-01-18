@@ -140,7 +140,8 @@ def test_integration():
         print("\n1. Checking TradeJournal integration with competition_bot...")
         
         # Check if the imports are present in competition_bot
-        with open('/home/runner/work/AlphaWEEX/AlphaWEEX/competition_bot.py', 'r') as f:
+        bot_path = os.path.join(os.path.dirname(__file__), 'competition_bot.py')
+        with open(bot_path, 'r') as f:
             content = f.read()
             has_journal_import = 'from core.trade_journal import TradeJournal' in content
             has_state_import = 'from core.position_state import PositionStatePersistence' in content
@@ -159,7 +160,8 @@ def test_integration():
         print("\n2. Checking StrategyEngine integration...")
         
         # Check if the imports are present in strategy_engine
-        with open('/home/runner/work/AlphaWEEX/AlphaWEEX/core/strategy_engine.py', 'r') as f:
+        engine_path = os.path.join(os.path.dirname(__file__), 'core', 'strategy_engine.py')
+        with open(engine_path, 'r') as f:
             content = f.read()
             has_journal_import = 'from core.trade_journal import TradeJournal' in content
             has_format_method = 'def _format_journal_trades' in content
