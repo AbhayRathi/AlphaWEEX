@@ -43,7 +43,7 @@ def test_leverage_endpoint():
         call_args = mock_post.call_args
         url = call_args[0][0]
         
-        if "/capi/v2/account/leverage" not in url:
+        if "/capi/v2/account/setLeverage" not in url:
             print(f"   ❌ FAILED: Wrong endpoint path: {url}")
             return False
         
@@ -54,16 +54,20 @@ def test_leverage_endpoint():
             print(f"   ❌ FAILED: Wrong symbol: {body_data.get('symbol')}")
             return False
         
-        if body_data.get('marginMode') != "isolated":
-            print(f"   ❌ FAILED: Missing or wrong marginMode: {body_data.get('marginMode')}")
+        if body_data.get('marginMode') != 1:
+            print(f"   ❌ FAILED: marginMode should be integer 1 (isolated), got: {body_data.get('marginMode')}")
             return False
         
-        if body_data.get('leverage') != "10":
-            print(f"   ❌ FAILED: Leverage should be string '10', got: {body_data.get('leverage')}")
+        if not isinstance(body_data.get('marginMode'), int):
+            print(f"   ❌ FAILED: marginMode should be int type, got: {type(body_data.get('marginMode'))}")
             return False
         
-        if not isinstance(body_data.get('leverage'), str):
-            print(f"   ❌ FAILED: Leverage should be string type, got: {type(body_data.get('leverage'))}")
+        if body_data.get('leverage') != 10:
+            print(f"   ❌ FAILED: Leverage should be integer 10, got: {body_data.get('leverage')}")
+            return False
+        
+        if not isinstance(body_data.get('leverage'), int):
+            print(f"   ❌ FAILED: Leverage should be integer type, got: {type(body_data.get('leverage'))}")
             return False
         
         if not result:

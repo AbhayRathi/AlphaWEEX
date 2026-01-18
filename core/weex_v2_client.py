@@ -436,24 +436,27 @@ class WEEXv2Client:
                 logger.error(f"Balance parsing error: {str(e)}")
                 return None
     
-    def set_leverage(self, symbol: str, leverage: int = 20) -> bool:
+    def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/leverage
+        Endpoint: POST /capi/v2/account/setLeverage
         
         Args:
             symbol: Trading symbol
             leverage: Leverage value (default: 20)
+            margin_mode: Margin mode - "isolated" or "cross" (default: "isolated")
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            path = "/capi/v2/account/leverage"
+            path = "/capi/v2/account/setLeverage"
+            # Map margin mode to integer: 1 for Isolated, 2 for Cross
+            margin_mode_int = 1 if margin_mode.lower() == "isolated" else 2
             body = {
                 "symbol": symbol,
-                "marginMode": "isolated",  # Critical Fix 1: Changed from crossed to isolated
-                "leverage": str(leverage)
+                "marginMode": margin_mode_int,  # Integer: 1 for Isolated, 2 for Cross
+                "leverage": leverage
             }
             
             response = self.send_weex_request("POST", path, body=body)
@@ -488,7 +491,7 @@ class WEEXv2Client:
     def has_open_position(self, symbol: str) -> bool:
         """
         Check if there's an open position for a symbol
-        Endpoint: GET /capi/v2/account/positions
+        Endpoint: GET /capi/v2/account/allPosition
         
         Args:
             symbol: Trading symbol
@@ -497,8 +500,9 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
-            path = "/capi/v2/account/positions"
+            path = "/capi/v2/account/allPosition"
             query_params = f"?symbol={symbol}" if symbol else ""
+            logger.debug(f"Position check path: {path}")
             
             response = self.send_weex_request("GET", path, query_params)
             
