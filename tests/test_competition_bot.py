@@ -236,55 +236,32 @@ class TestWEEXv2Client:
             # Check URL contains 'granularity' not 'interval'
             assert "granularity=1m" in url
             assert "interval=" not in url
-            # Verify cmt_ prefix is stripped and symbol is uppercase for market data
-            assert "BTCUSDT" in url
-            assert "cmt_" not in url.lower()
+            # Verify symbol is preserved as-is (with cmt_ prefix)
+            assert "cmt_btcusdt" in url
     
-    def test_get_klines_spbl_suffix_fallback(self, capsys):
-        """Test klines endpoint tries _SPBL suffix if plain uppercase fails"""
+    def test_get_klines_error_handling(self):
+        """Test klines endpoint handles errors properly"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Mock first call (plain uppercase) to fail with 400
+        # Mock call to fail with 400
         mock_response_fail = Mock()
         mock_response_fail.status_code = 400
         mock_response_fail.text = "Invalid symbol"
         mock_response_fail.json.return_value = {'code': 40020, 'message': 'Invalid symbol'}
         
-        # Mock second call (with _SPBL) to succeed
-        mock_response_success = Mock()
-        mock_response_success.status_code = 200
-        mock_response_success.json.return_value = [
-            [1234567890, '50000', '51000', '49000', '50500', '100'],
-            [1234567900, '50500', '51500', '50000', '51000', '150']
-        ]
-        
-        # Patch the session.get method to return different responses
-        with patch.object(client.session, 'get', side_effect=[mock_response_fail, mock_response_success]) as mock_get:
+        # Patch the session.get method to return error response
+        with patch.object(client.session, 'get', return_value=mock_response_fail) as mock_get:
             # Call get_market_klines
             klines = client.get_market_klines("cmt_btcusdt", "1m", limit=2)
             
-            # Verify result - should succeed with _SPBL suffix
-            assert len(klines) == 2
+            # Verify result - should return empty list on error
+            assert len(klines) == 0
             
-            # Verify the endpoint was called twice
-            assert mock_get.call_count == 2
-            
-            # First call should be plain uppercase
-            first_call_url = mock_get.call_args_list[0][0][0]
-            assert "BTCUSDT" in first_call_url
-            assert "_SPBL" not in first_call_url
-            
-            # Second call should have _SPBL suffix
-            second_call_url = mock_get.call_args_list[1][0][0]
-            assert "BTCUSDT_SPBL" in second_call_url
-            
-            # Check DEBUG print statements were executed
-            captured = capsys.readouterr()
-            assert "DEBUG: Requesting Klines with symbol: BTCUSDT" in captured.out
-            assert "DEBUG: Requesting Klines with symbol: BTCUSDT_SPBL" in captured.out
+            # Verify the endpoint was called once
+            assert mock_get.call_count == 1
     
-    def test_get_klines_plain_uppercase_success(self, capsys):
-        """Test klines endpoint succeeds with plain uppercase (no _SPBL needed)"""
+    def test_get_klines_success(self):
+        """Test klines endpoint succeeds with symbol preserved as-is"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response on first try
@@ -302,20 +279,15 @@ class TestWEEXv2Client:
             # Verify result
             assert len(klines) == 1
             
-            # Verify the endpoint was called only once (no fallback needed)
+            # Verify the endpoint was called only once
             assert mock_get.call_count == 1
             
-            # Should be plain uppercase
+            # Should preserve the original symbol format
             call_url = mock_get.call_args[0][0]
-            assert "BTCUSDT" in call_url
-            assert "_SPBL" not in call_url
-            
-            # Check DEBUG print statement
-            captured = capsys.readouterr()
-            assert "DEBUG: Requesting Klines with symbol: BTCUSDT" in captured.out
+            assert "cmt_btcusdt" in call_url
     
     def test_get_order_book_symbol_format(self):
-        """Test order book endpoint uses uppercase symbol without cmt_ prefix"""
+        """Test order book endpoint preserves symbol with cmt_ prefix"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -343,13 +315,12 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Verify symbol is uppercase and cmt_ prefix is removed
-            assert "BTCUSDT" in url
-            assert "cmt_" not in url.lower()
+            # Verify symbol is preserved with cmt_ prefix
+            assert "cmt_btcusdt" in url
             assert "depth=5" in url
     
     def test_get_ticker_symbol_format(self):
-        """Test ticker endpoint uses uppercase symbol without cmt_ prefix"""
+        """Test ticker endpoint preserves symbol with cmt_ prefix"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -380,12 +351,11 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Verify symbol is uppercase and cmt_ prefix is removed
-            assert "ETHUSDT" in url
-            assert "cmt_" not in url.lower()
+            # Verify symbol is preserved with cmt_ prefix
+            assert "cmt_ethusdt" in url
     
-    def test_symbol_format_already_uppercase(self):
-        """Test symbol formatting handles already uppercase symbols"""
+    def test_symbol_format_preserved(self):
+        """Test symbol formatting preserves symbols as-is"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -397,8 +367,8 @@ class TestWEEXv2Client:
         
         # Patch the session.get method
         with patch.object(client.session, 'get', return_value=mock_response) as mock_get:
-            # Call with already uppercase symbol (no cmt_ prefix)
-            klines = client.get_market_klines("BTCUSDT", "1m", limit=1)
+            # Call with cmt_ prefix
+            klines = client.get_market_klines("cmt_btcusdt", "1m", limit=1)
             
             # Verify result
             assert len(klines) == 1
@@ -408,8 +378,8 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Should still have uppercase symbol
-            assert "BTCUSDT" in url
+            # Should preserve the original symbol format
+            assert "cmt_btcusdt" in url
     
     def test_place_market_order_preserves_cmt_prefix(self):
         """Test that place_market_order preserves the original cmt_ prefix for trading"""
