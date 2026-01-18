@@ -208,9 +208,11 @@ The bot displays statistics every 10 iterations:
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/capi/v2/market/candles` | GET | Get K-lines data |
-| `/capi/v2/account/setLeverage` | POST | Set leverage |
-| `/capi/v2/account/positions` | GET | Check positions |
+| `/api/v2/account/set-leverage` | POST | Set leverage |
+| `/api/v2/account/all-position` | GET | Check positions |
 | `/capi/v2/order/placeOrder` | POST | Place orders |
+
+**Note:** Private account endpoints use `/api/v2/` prefix with hyphenated paths (e.g., `set-leverage`, `all-position`).
 
 ## Error Handling
 
