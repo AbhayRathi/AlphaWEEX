@@ -215,7 +215,7 @@ class WEEXv2Client:
             logger.error(f"❌ Request failed: {str(e)}")
             raise
     
-    def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List]:
+    def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[Dict[str, float]]:
             # FIX: Ensure symbol is lowercase and starts with 'cmt_'
             symbol = symbol.lower()
             if not symbol.startswith("cmt_"):
@@ -229,7 +229,6 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Note: We use the locally fixed 'symbol' here, NOT self.clean_symbol()
                 query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
@@ -237,14 +236,33 @@ class WEEXv2Client:
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # WEEX V2 Contract API often returns a list directly [[...], [...]]
+                    raw_list = []
                     if isinstance(data, list):
-                        return data
-                    # Fallback check for dict format
+                        raw_list = data
                     elif isinstance(data, dict) and data.get('code') == '00000':
-                        return data.get('data', [])
+                        raw_list = data.get('data', [])
+                    
+                    # CRITICAL FIX: Convert "List of Strings" -> "List of Dictionaries with Floats"
+                    # WEEX V2 Format: [timestamp, open, high, low, close, volume, ...]
+                    formatted_candles = []
+                    for candle in raw_list:
+                        if len(candle) >= 6: # Ensure we have enough data points
+                            try:
+                                formatted_candles.append({
+                                    "timestamp": int(candle[0]),
+                                    "open": float(candle[1]),
+                                    "high": float(candle[2]),
+                                    "low": float(candle[3]),
+                                    "close": float(candle[4]),
+                                    "volume": float(candle[5])
+                                })
+                            except (ValueError, IndexError):
+                                continue # Skip bad candles
+                                
+                    if formatted_candles:
+                        # logger.debug(f"✅ Retrieved {len(formatted_candles)} parsed candles for {symbol}")
+                        return formatted_candles
                     else:
-                        logger.error(f"❌ Unexpected response format for {symbol}: {data}")
                         return []
                 else:
                     logger.error(f"❌ HTTP {response.status_code} for {symbol}: {response.text}")
