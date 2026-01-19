@@ -200,7 +200,7 @@ class BehavioralAdversary:
             "https://api.deepseek.com/v1/chat/completions",
             headers=headers,
             json=sanitized_payload,
-            timeout=10
+            timeout=30
         )
         
         if response.status_code == 451:
