@@ -177,13 +177,13 @@ class TestWEEXv2Client:
             assert mock_post.called
             call_args = mock_post.call_args
             
-            # Check URL contains correct path (updated to set-leverage hyphenated)
-            assert "/capi/v2/account/set-leverage" in call_args[0][0]
+            # Check URL contains correct path (updated to position/setLeverage camelCase)
+            assert "/capi/v2/account/position/setLeverage" in call_args[0][0]
             
             # Check body contains marginMode as integer 2 and leverage as integer
             body_data = json.loads(call_args[1]['data'])
-            # Symbol should be uppercase per API requirements
-            assert body_data['symbol'] == "CMT_BTCUSDT"
+            # Symbol should be cleaned (cmt_ removed, uppercase)
+            assert body_data['symbol'] == "BTCUSDT"
             assert body_data['marginMode'] == 2  # Integer: 2 (Cross mode required)
             assert body_data['leverage'] == 10
             assert isinstance(body_data['marginMode'], int)
@@ -238,8 +238,9 @@ class TestWEEXv2Client:
             # Check URL contains 'granularity' not 'interval'
             assert "granularity=1m" in url
             assert "interval=" not in url
-            # Verify symbol is uppercase per API requirements
-            assert "CMT_BTCUSDT" in url
+            # Verify symbol is cleaned (cmt_ removed, uppercase)
+            assert "BTCUSDT" in url
+            assert "CMT_" not in url
     
     def test_get_klines_error_handling(self):
         """Test klines endpoint handles errors properly"""
@@ -284,9 +285,10 @@ class TestWEEXv2Client:
             # Verify the endpoint was called only once
             assert mock_get.call_count == 1
             
-            # Should convert symbol to uppercase
+            # Should clean symbol (remove cmt_, uppercase)
             call_url = mock_get.call_args[0][0]
-            assert "CMT_BTCUSDT" in call_url
+            assert "BTCUSDT" in call_url
+            assert "CMT_" not in call_url
     
     def test_get_order_book_symbol_format(self):
         """Test order book endpoint converts symbol to uppercase"""
@@ -317,8 +319,9 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Verify symbol is converted to uppercase
-            assert "CMT_BTCUSDT" in url
+            # Verify symbol is cleaned (cmt_ removed, uppercase)
+            assert "BTCUSDT" in url
+            assert "CMT_" not in url
             assert "depth=5" in url
     
     def test_get_ticker_symbol_format(self):
@@ -353,11 +356,12 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Verify symbol is converted to uppercase
-            assert "CMT_ETHUSDT" in url
+            # Verify symbol is cleaned (cmt_ removed, uppercase)
+            assert "ETHUSDT" in url
+            assert "CMT_" not in url
     
     def test_symbol_format_preserved(self):
-        """Test symbol formatting converts symbols to uppercase"""
+        """Test symbol formatting cleans symbols (removes cmt_, uppercase)"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -380,11 +384,12 @@ class TestWEEXv2Client:
             call_args = mock_get.call_args
             url = call_args[0][0]
             
-            # Should convert symbol to uppercase
-            assert "CMT_BTCUSDT" in url
+            # Should clean symbol (remove cmt_, uppercase)
+            assert "BTCUSDT" in url
+            assert "CMT_" not in url
     
     def test_place_market_order_preserves_cmt_prefix(self):
-        """Test that place_market_order converts symbol to uppercase"""
+        """Test that place_market_order cleans symbol (removes cmt_, uppercase)"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful order response
@@ -411,10 +416,10 @@ class TestWEEXv2Client:
                 assert mock_post.called
                 call_args = mock_post.call_args
                 
-                # Check body contains uppercase symbol
+                # Check body contains cleaned symbol (cmt_ removed, uppercase)
                 body_data = json.loads(call_args[1]['data'])
-                assert body_data['symbol'] == "CMT_BTCUSDT"
-                assert "CMT_" in body_data['symbol']
+                assert body_data['symbol'] == "BTCUSDT"
+                assert "CMT_" not in body_data['symbol']
                 assert body_data['side'] == "BUY"
                 assert body_data['type'] == "MARKET"
 
