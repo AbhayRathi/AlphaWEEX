@@ -79,6 +79,28 @@ class WEEXv2Client:
             "cmt_ltcusdt": 2,   # LTC: 2 decimals
         }
     
+    def clean_symbol(self, symbol: Optional[str]) -> str:
+        """
+        Clean symbol for API calls: remove 'cmt_' prefix and convert to UPPERCASE
+        
+        Args:
+            symbol: Trading symbol (may have 'cmt_' prefix, any case, or None)
+            
+        Returns:
+            str: Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT')
+                 Returns empty string if symbol is None or empty
+            
+        Example:
+            clean_symbol('cmt_btcusdt') -> 'BTCUSDT'
+            clean_symbol('cmt_ETHUSDT') -> 'ETHUSDT'
+            clean_symbol('SOLUSDT') -> 'SOLUSDT'
+            clean_symbol(None) -> ''
+            clean_symbol('') -> ''
+        """
+        if not symbol:
+            return ""
+        return symbol.replace('cmt_', '').upper()
+    
     def round_qty(self, symbol: str, qty: float) -> float:
         """
         Round quantity to the correct precision for the symbol
@@ -202,11 +224,11 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Ensure symbol is uppercase for API call
-                symbol_upper = symbol.upper()
-                logger.debug(f"Requesting klines for symbol: {symbol_upper}")
+                # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+                symbol_clean = self.clean_symbol(symbol)
+                logger.debug(f"Requesting klines for symbol: {symbol_clean}")
                 
-                query_params = f"?symbol={urllib.parse.quote(symbol_upper)}&granularity={interval}&limit={limit}"
+                query_params = f"?symbol={urllib.parse.quote(symbol_clean)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
@@ -243,13 +265,13 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
-            # Ensure symbol is uppercase for API call
-            symbol_upper = symbol.upper()
-            logger.debug(f"Fetching funding rate for symbol: {symbol_upper}")
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+            symbol_clean = self.clean_symbol(symbol)
+            logger.debug(f"Fetching funding rate for symbol: {symbol_clean}")
             
             # Updated path to correct WEEX V2 endpoint (removed 'public')
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -296,12 +318,12 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Ensure symbol is uppercase for API call
-            symbol_upper = symbol.upper()
-            logger.debug(f"Fetching order book for symbol: {symbol_upper}")
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+            symbol_clean = self.clean_symbol(symbol)
+            logger.debug(f"Fetching order book for symbol: {symbol_clean}")
             
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -335,12 +357,12 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Ensure symbol is uppercase for API call
-            symbol_upper = symbol.upper()
-            logger.debug(f"Fetching ticker for symbol: {symbol_upper}")
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+            symbol_clean = self.clean_symbol(symbol)
+            logger.debug(f"Fetching ticker for symbol: {symbol_clean}")
             
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -452,7 +474,7 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/set-leverage
+        Endpoint: POST /capi/v2/account/position/setLeverage
         
         Args:
             symbol: Trading symbol
@@ -466,13 +488,13 @@ class WEEXv2Client:
             The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
         try:
-            # Ensure symbol is uppercase for API call
-            symbol = symbol.upper()
-            path = "/capi/v2/account/set-leverage"
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+            symbol_clean = self.clean_symbol(symbol)
+            path = "/capi/v2/account/position/setLeverage"
             # Always use marginMode 2 (Cross) as per requirements
             # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
             body = {
-                "symbol": symbol,
+                "symbol": symbol_clean,
                 "leverage": int(leverage),
                 "marginMode": 2  # Integer: 2 for Cross (required by API)
             }
@@ -482,13 +504,13 @@ class WEEXv2Client:
             if response.status_code == 200:
                 data = response.json()
                 if data.get('code') == 0 or data.get('success'):
-                    logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
+                    logger.info(f"✅ Leverage set to {leverage}x for {symbol_clean}")
                     return True
                 else:
                     error_msg = str(data.get('message', 'Unknown error')).lower()
                     # Ignore "no change needed" and similar errors (WEEX returns error when already set)
                     if "already set" in error_msg or "no change" in error_msg or "same" in error_msg:
-                        logger.info(f"✅ Leverage already at {leverage}x for {symbol} (no change needed)")
+                        logger.info(f"✅ Leverage already at {leverage}x for {symbol_clean} (no change needed)")
                         return True
                     else:
                         logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
@@ -518,26 +540,27 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
-            # Ensure symbol is uppercase for API call (handle None/empty gracefully)
-            symbol = symbol.upper() if symbol else None
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE (handles None/empty gracefully)
+            symbol_clean = self.clean_symbol(symbol)
             path = "/capi/v2/account/position/allPosition"
-            query_params = f"?symbol={symbol}" if symbol else ""
+            query_params = f"?symbol={symbol_clean}" if symbol_clean else ""
             logger.debug(f"Position check path: {path}")
             
             response = self.send_weex_request("GET", path, query_params)
             
             if response.status_code == 200:
-                response_json = response.json()
-                # The API returns a list [item, item], not a dict {"data": []}
-                positions = response_json if isinstance(response_json, list) else response_json.get('data', [])
+                response_data = response.json()
+                # The API returns a raw list [{}]. Handle both list and dict formats safely:
+                positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
                 
                 # Check if any position has non-zero size
+                # Note: API returns cleaned symbols (e.g., "BTCUSDT"), so we compare with symbol_clean
                 for pos in positions:
                     try:
                         size = float(pos.get('size', 0))
-                        if pos.get('symbol') == symbol and size > 0:
-                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                            # Store position for TP/SL tracking
+                        if pos.get('symbol') == symbol_clean and size > 0:
+                            logger.info(f"📊 Open position found for {symbol_clean}: {pos.get('size')} @ {pos.get('entryPrice')}")
+                            # Store position using original symbol for internal tracking consistency
                             self.open_positions[symbol] = pos
                             return True
                     except (ValueError, TypeError):
@@ -580,12 +603,12 @@ class WEEXv2Client:
             # Round quantity to correct precision (uses lowercase symbol for precision map lookup)
             size = self.round_qty(symbol, size)
             
-            # Ensure symbol is uppercase for API call
-            symbol_upper = symbol.upper()
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
+            symbol_clean = self.clean_symbol(symbol)
             
             path = "/capi/v2/order/placeOrder"
             body = {
-                "symbol": symbol_upper,
+                "symbol": symbol_clean,
                 "side": side.upper(),
                 "type": "MARKET",
                 "size": str(size)
