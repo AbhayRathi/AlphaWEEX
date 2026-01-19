@@ -176,7 +176,8 @@ class TestHasOpenPosition:
         # Should find position
         result = client.has_open_position("cmt_btcusdt")
         assert result is True
-        assert "cmt_btcusdt" in client.open_positions
+        # Position is now stored with cleaned symbol key (BTCUSDT) after symbol overwrite
+        assert "BTCUSDT" in client.open_positions
     
     @patch.object(WEEXv2Client, 'send_weex_request')
     def test_has_open_position_handles_dict_format(self, mock_send_request):
