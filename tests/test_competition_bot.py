@@ -177,8 +177,8 @@ class TestWEEXv2Client:
             assert mock_post.called
             call_args = mock_post.call_args
             
-            # Check URL contains correct path (updated to set-leverage)
-            assert "/api/v2/account/set-leverage" in call_args[0][0]
+            # Check URL contains correct path (updated to set-leverage with /capi/)
+            assert "/capi/v2/account/set-leverage" in call_args[0][0]
             
             # Check body contains marginMode as integer and leverage as integer
             body_data = json.loads(call_args[1]['data'])
