@@ -68,15 +68,24 @@ class WEEXv2Client:
         
         # Precision settings for different symbols (lowercase keys)
         # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
+        # Map includes both cmt_prefixed and clean formats for compatibility
         self.precision_map = {
             "cmt_btcusdt": 4,   # BTC: 4 decimals
+            "btcusdt": 4,       # BTC: 4 decimals (clean format)
             "cmt_ethusdt": 3,   # ETH: 3 decimals
+            "ethusdt": 3,       # ETH: 3 decimals (clean format)
             "cmt_solusdt": 2,   # SOL: 2 decimals
+            "solusdt": 2,       # SOL: 2 decimals (clean format)
             "cmt_adausdt": 1,   # ADA: 1 decimal
+            "adausdt": 1,       # ADA: 1 decimal (clean format)
             "cmt_dogeusdt": 0,  # DOGE: 0 decimals (whole numbers)
+            "dogeusdt": 0,      # DOGE: 0 decimals (clean format)
             "cmt_xrpusdt": 1,   # XRP: 1 decimal
+            "xrpusdt": 1,       # XRP: 1 decimal (clean format)
             "cmt_bnbusdt": 3,   # BNB: 3 decimals
+            "bnbusdt": 3,       # BNB: 3 decimals (clean format)
             "cmt_ltcusdt": 2,   # LTC: 2 decimals
+            "ltcusdt": 2,       # LTC: 2 decimals (clean format)
         }
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
@@ -355,14 +364,13 @@ class WEEXv2Client:
         Returns:
             Dictionary with ticker data (last price, 24h volume, etc.), or None if failed
         """
+        symbol = symbol.replace('cmt_', '').upper()
         try:
             import urllib.parse
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-            symbol_clean = self.clean_symbol(symbol)
-            logger.debug(f"Fetching ticker for symbol: {symbol_clean}")
+            logger.debug(f"Fetching ticker for symbol: {symbol}")
             
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -487,14 +495,13 @@ class WEEXv2Client:
         Note:
             The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
+        symbol = symbol.replace('cmt_', '').upper()
         try:
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-            symbol_clean = self.clean_symbol(symbol)
             path = "/capi/v2/account/position/setLeverage"
             # Always use marginMode 2 (Cross) as per requirements
             # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
             body = {
-                "symbol": symbol_clean,
+                "symbol": symbol,
                 "leverage": int(leverage),
                 "marginMode": 2  # Integer: 2 for Cross (required by API)
             }
@@ -504,13 +511,13 @@ class WEEXv2Client:
             if response.status_code == 200:
                 data = response.json()
                 if data.get('code') == 0 or data.get('success'):
-                    logger.info(f"✅ Leverage set to {leverage}x for {symbol_clean}")
+                    logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
                     return True
                 else:
                     error_msg = str(data.get('message', 'Unknown error')).lower()
                     # Ignore "no change needed" and similar errors (WEEX returns error when already set)
                     if "already set" in error_msg or "no change" in error_msg or "same" in error_msg:
-                        logger.info(f"✅ Leverage already at {leverage}x for {symbol_clean} (no change needed)")
+                        logger.info(f"✅ Leverage already at {leverage}x for {symbol} (no change needed)")
                         return True
                     else:
                         logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
@@ -539,11 +546,10 @@ class WEEXv2Client:
         Returns:
             True if position exists, False otherwise
         """
+        symbol = symbol.replace('cmt_', '').upper()
         try:
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE (handles None/empty gracefully)
-            symbol_clean = self.clean_symbol(symbol)
             path = "/capi/v2/account/position/allPosition"
-            query_params = f"?symbol={symbol_clean}" if symbol_clean else ""
+            query_params = f"?symbol={symbol}" if symbol else ""
             logger.debug(f"Position check path: {path}")
             
             response = self.send_weex_request("GET", path, query_params)
@@ -554,13 +560,13 @@ class WEEXv2Client:
                 positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
                 
                 # Check if any position has non-zero size
-                # Note: API returns cleaned symbols (e.g., "BTCUSDT"), so we compare with symbol_clean
+                # Note: API returns cleaned symbols (e.g., "BTCUSDT"), so we compare with symbol
                 for pos in positions:
                     try:
                         size = float(pos.get('size', 0))
-                        if pos.get('symbol') == symbol_clean and size > 0:
-                            logger.info(f"📊 Open position found for {symbol_clean}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                            # Store position using original symbol for internal tracking consistency
+                        if pos.get('symbol') == symbol and size > 0:
+                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
+                            # Store position using the symbol
                             self.open_positions[symbol] = pos
                             return True
                     except (ValueError, TypeError):
@@ -594,8 +600,9 @@ class WEEXv2Client:
         Returns:
             Order response dict or None if failed
         """
+        symbol = symbol.replace('cmt_', '').upper()
         try:
-            # Spread guard (symbol will be converted to uppercase inside check_spread -> get_order_book)
+            # Spread guard (symbol is already cleaned/uppercase at this point)
             if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
                 logger.warning(f"🛑 Order rejected for {symbol} due to wide spread")
                 return None
@@ -603,12 +610,9 @@ class WEEXv2Client:
             # Round quantity to correct precision (uses lowercase symbol for precision map lookup)
             size = self.round_qty(symbol, size)
             
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-            symbol_clean = self.clean_symbol(symbol)
-            
             path = "/capi/v2/order/placeOrder"
             body = {
-                "symbol": symbol_clean,
+                "symbol": symbol,
                 "side": side.upper(),
                 "type": "MARKET",
                 "size": str(size)
@@ -647,6 +651,7 @@ class WEEXv2Client:
             "PARTIAL_1" for first partial at +0.25%, "PARTIAL_2" for reinvestment at +0.50%, 
             "SL" if stop loss triggered, None otherwise
         """
+        symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
             return None
         
@@ -740,6 +745,7 @@ class WEEXv2Client:
         Returns:
             True if successful, False otherwise
         """
+        symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
             logger.warning(f"⚠️ No position to close for {symbol}")
             return False
@@ -772,6 +778,7 @@ class WEEXv2Client:
         Returns:
             Order result dict or None if failed
         """
+        symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
             logger.warning(f"⚠️ No position to partially close for {symbol}")
             return None
