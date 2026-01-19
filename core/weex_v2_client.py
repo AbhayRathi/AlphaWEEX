@@ -215,7 +215,7 @@ class WEEXv2Client:
             logger.error(f"❌ Request failed: {str(e)}")
             raise
     
-    def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[Dict[str, float]]:
+    def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List[float]]:
             # FIX: Ensure symbol is lowercase and starts with 'cmt_'
             symbol = symbol.lower()
             if not symbol.startswith("cmt_"):
@@ -242,25 +242,24 @@ class WEEXv2Client:
                     elif isinstance(data, dict) and data.get('code') == '00000':
                         raw_list = data.get('data', [])
                     
-                    # CRITICAL FIX: Convert "List of Strings" -> "List of Dictionaries with Floats"
+                    # CRITICAL FIX: Convert Strings to Floats, but KEEP LIST FORMAT
                     # WEEX V2 Format: [timestamp, open, high, low, close, volume, ...]
                     formatted_candles = []
                     for candle in raw_list:
-                        if len(candle) >= 6: # Ensure we have enough data points
+                        if len(candle) >= 6: 
                             try:
-                                formatted_candles.append({
-                                    "timestamp": int(candle[0]),
-                                    "open": float(candle[1]),
-                                    "high": float(candle[2]),
-                                    "low": float(candle[3]),
-                                    "close": float(candle[4]),
-                                    "volume": float(candle[5])
-                                })
+                                formatted_candles.append([
+                                    int(candle[0]),     # 0: Timestamp
+                                    float(candle[1]),   # 1: Open
+                                    float(candle[2]),   # 2: High
+                                    float(candle[3]),   # 3: Low
+                                    float(candle[4]),   # 4: Close
+                                    float(candle[5])    # 5: Volume
+                                ])
                             except (ValueError, IndexError):
                                 continue # Skip bad candles
                                 
                     if formatted_candles:
-                        # logger.debug(f"✅ Retrieved {len(formatted_candles)} parsed candles for {symbol}")
                         return formatted_candles
                     else:
                         return []
