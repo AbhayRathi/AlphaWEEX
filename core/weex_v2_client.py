@@ -216,8 +216,8 @@ class WEEXv2Client:
             raise
     
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List]:
-        symbol = symbol.replace('cmt_', '').upper()    
-        """
+            symbol = symbol.replace('cmt_', '').upper()    
+            """
             Get K-lines (candlestick) data from WEEX
             Endpoint: GET /capi/v2/market/candles
             
