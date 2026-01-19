@@ -527,9 +527,9 @@ class WEEXv2Client:
             response = self.send_weex_request("GET", path, query_params)
             
             if response.status_code == 200:
-                response_data = response.json()
-                # If the API returns a list directly, use it. If it's a dict, get 'data'.
-                positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
+                response_json = response.json()
+                # The API returns a list [item, item], not a dict {"data": []}
+                positions = response_json if isinstance(response_json, list) else response_json.get('data', [])
                 
                 # Check if any position has non-zero size
                 for pos in positions:
