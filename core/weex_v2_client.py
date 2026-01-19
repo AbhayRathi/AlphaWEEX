@@ -537,8 +537,8 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE (handle None/empty gracefully)
-            symbol_clean = self.clean_symbol(symbol) if symbol else None
+            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE (handles None/empty gracefully)
+            symbol_clean = self.clean_symbol(symbol)
             path = "/capi/v2/account/position/allPosition"
             query_params = f"?symbol={symbol_clean}" if symbol_clean else ""
             logger.debug(f"Position check path: {path}")

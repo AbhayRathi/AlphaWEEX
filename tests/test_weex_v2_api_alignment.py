@@ -45,6 +45,12 @@ class TestSymbolCleaning:
         result = client.clean_symbol("")
         assert result == ""
     
+    def test_clean_symbol_none(self):
+        """Test cleaning None symbol"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        result = client.clean_symbol(None)
+        assert result == ""
+    
     def test_clean_symbol_multiple_symbols(self):
         """Test cleaning multiple different symbols"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
