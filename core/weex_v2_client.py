@@ -94,10 +94,14 @@ class WEEXv2Client:
             This method expects lowercase symbols to match precision_map keys.
             Symbol uppercase conversion happens separately for API calls.
         """
-        precision = self.precision_map.get(symbol.lower())
-        if precision is None:
-            logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+        if not symbol:
+            logger.warning(f"⚠️ Invalid symbol: {symbol}, using default 2 decimals")
             precision = 2
+        else:
+            precision = self.precision_map.get(symbol.lower())
+            if precision is None:
+                logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+                precision = 2
         return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
@@ -514,8 +518,8 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
-            # Ensure symbol is uppercase for API call
-            symbol = symbol.upper() if symbol else symbol
+            # Ensure symbol is uppercase for API call (handle None/empty gracefully)
+            symbol = symbol.upper() if symbol else None
             path = "/capi/v2/account/position/allPosition"
             query_params = f"?symbol={symbol}" if symbol else ""
             logger.debug(f"Position check path: {path}")
