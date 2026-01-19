@@ -216,40 +216,31 @@ class WEEXv2Client:
             raise
     
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List]:
-            symbol = symbol.replace('cmt_', '').upper()    
+            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+            symbol = symbol.lower()
+            if not symbol.startswith("cmt_"):
+                symbol = f"cmt_{symbol}"
+    
             """
             Get K-lines (candlestick) data from WEEX
             Endpoint: GET /capi/v2/market/candles
-            
-            Args:
-                symbol: Trading symbol (e.g., "cmt_btcusdt")
-                interval: Time interval (default: '1m'). Valid values: 1m, 5m, 15m, 30m, 1h, 4h, 1d
-                limit: Number of candles to retrieve (default: 100)
-                
-            Returns:
-                List of candle data arrays [[timestamp, open, high, low, close, volume], ...]
-                Empty list if request fails
             """
             try:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-                symbol_clean = self.clean_symbol(symbol)
-                logger.debug(f"Requesting klines for symbol: {symbol_clean}")
-                
-                query_params = f"?symbol={urllib.parse.quote(symbol_clean)}&granularity={interval}&limit={limit}"
+                # Note: We use the locally fixed 'symbol' here, NOT self.clean_symbol()
+                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
                 if response.status_code == 200:
                     data = response.json()
                     
-                    # WEEX V2 Contract API returns a list directly [[...], [...]]
+                    # WEEX V2 Contract API often returns a list directly [[...], [...]]
                     if isinstance(data, list):
-                        logger.info(f"✅ Retrieved {len(data)} candles for {symbol}")
                         return data
-                    # Fallback for Spot or different formats
+                    # Fallback check for dict format
                     elif isinstance(data, dict) and data.get('code') == '00000':
                         return data.get('data', [])
                     else:
@@ -264,56 +255,47 @@ class WEEXv2Client:
                 return []
     
     def get_funding_rate(self, symbol: str) -> Optional[float]:
-        symbol = symbol.replace('cmt_', '').upper()
-        """
-        Get current funding rate for a symbol from WEEX
-        Endpoint: GET /capi/v2/market/funding-rate?symbol={symbol}
-        
-        Args:
-            symbol: Trading symbol (e.g., "cmt_btcusdt")
-            
-        Returns:
-            Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
-        """
-        try:
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-            symbol_clean = self.clean_symbol(symbol)
-            logger.debug(f"Fetching funding rate for symbol: {symbol_clean}")
-            
-            # Updated path to correct WEEX V2 endpoint (removed 'public')
-            path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}"
-            
-            response = self.send_weex_request("GET", path, query_params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0 or data.get('success'):
-                    funding_data = data.get('data', {})
-                    # Extract funding rate - try different field names
-                    funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
-                    if funding_rate is not None:
-                        # Convert to float and then to percentage if needed
-                        funding_rate_float = float(funding_rate)
-                        funding_rate_pct = funding_rate_float * 100 if abs(funding_rate_float) < 1 else funding_rate_float
-                        logger.debug(f"✅ Retrieved funding rate for {symbol}: {funding_rate_pct:.4f}%")
-                        return funding_rate_pct
-                    else:
-                        logger.warning(f"⚠️ Funding rate not found in response for {symbol}, using default fallback")
-                        return 0.0001  # Default funding rate fallback (0.01%)
-                else:
-                    logger.warning(f"⚠️ Funding rate API error: {data.get('message', 'Unknown error')}, using default fallback")
-                    return 0.0001  # Default funding rate fallback (0.01%)
-            elif response.status_code == 404:
-                logger.warning(f"⚠️ Funding rate endpoint 404 for {symbol}, using default fallback")
-                return 0.0001  # Default funding rate fallback (0.01%)
-            else:
-                logger.warning(f"⚠️ HTTP {response.status_code} on funding rate for {symbol}, using default fallback")
-                return 0.0001  # Default funding rate fallback (0.01%)
+            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+            symbol = symbol.lower()
+            if not symbol.startswith("cmt_"):
+                symbol = f"cmt_{symbol}"
+    
+            """
+            Get current funding rate for a symbol from WEEX
+            Endpoint: GET /capi/v2/market/funding-rate
+            """
+            try:
+                import urllib.parse
+                path = "/capi/v2/market/funding-rate"
                 
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to get funding rate for {symbol}: {str(e)}, using default fallback")
-            return 0.0001  # Default funding rate fallback (0.01%)
+                # Note: We use the locally fixed 'symbol' here
+                query_params = f"?symbol={urllib.parse.quote(symbol)}"
+                
+                response = self.send_weex_request("GET", path, query_params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == '00000' or data.get('success') is True:
+                        funding_data = data.get('data', {})
+                        
+                        # Extract funding rate - handle likely field names
+                        funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
+                        
+                        if funding_rate is not None:
+                            funding_rate_float = float(funding_rate)
+                            # Normalize to percentage if it's a raw decimal (e.g. 0.0001 -> 0.01)
+                            funding_rate_pct = funding_rate_float * 100 if abs(funding_rate_float) < 1 else funding_rate_float
+                            return funding_rate_pct
+                        else:
+                            return 0.0001 # Default fallback
+                    else:
+                        return 0.0001 # Default fallback
+                else:
+                    return 0.0001 # Default fallback
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to get funding rate for {symbol}: {str(e)}, using default fallback")
+                return 0.0001
     
     def get_order_book(self, symbol: str, depth: int = 5) -> Optional[Dict[str, Any]]:
         """
@@ -356,43 +338,41 @@ class WEEXv2Client:
             return None
     
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
-        symbol = symbol.replace('cmt_', '').upper()
-        """
-        Get ticker (24h stats) from WEEX
-        Endpoint: GET /capi/v2/market/ticker
-        
-        Args:
-            symbol: Trading symbol (e.g., "cmt_btcusdt")
-            
-        Returns:
-            Dictionary with ticker data (last price, 24h volume, etc.), or None if failed
-        """
-        try:
-            import urllib.parse
-            logger.debug(f"Fetching ticker for symbol: {symbol}")
-            
-            path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
-            
-            response = self.send_weex_request("GET", path, query_params)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0 or data.get('success'):
-                    ticker_data = data.get('data', {})
-                    logger.debug(f"✅ Retrieved ticker for {symbol}")
-                    return ticker_data
-                else:
-                    logger.error(f"❌ Ticker error: {data.get('message', 'Unknown error')}")
-                    return None
-            else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Failed to get ticker for {symbol}: {str(e)}")
-            return None
+            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+            symbol = symbol.lower()
+            if not symbol.startswith("cmt_"):
+                symbol = f"cmt_{symbol}"
     
+            """
+            Get ticker (24h stats) from WEEX
+            Endpoint: GET /capi/v2/market/ticker
+            """
+            try:
+                import urllib.parse
+                # logger.debug(f"Fetching ticker for symbol: {symbol}")
+                
+                path = "/capi/v2/market/ticker"
+                query_params = f"?symbol={urllib.parse.quote(symbol)}"
+                
+                response = self.send_weex_request("GET", path, query_params)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == '00000' or data.get('success') is True:
+                        ticker_data = data.get('data', {})
+                        # logger.debug(f"✅ Retrieved ticker for {symbol}")
+                        return ticker_data
+                    else:
+                        # logger.error(f"❌ Ticker error: {data.get('msg', 'Unknown error')}")
+                        return None
+                else:
+                    # logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"Failed to get ticker for {symbol}: {str(e)}")
+                return None
+        
     def _extract_price_from_order(self, order: Any) -> float:
         """
         Extract price from order book entry (handles both list and dict formats)
