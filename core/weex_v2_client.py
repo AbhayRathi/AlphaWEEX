@@ -454,7 +454,7 @@ class WEEXv2Client:
             The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
         try:
-            path = "/capi/v2/account/setLeverage"
+            path = "/capi/v2/account/set-leverage"
             # Always use marginMode 2 (Cross) as per requirements
             # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
             body = {
@@ -512,24 +512,27 @@ class WEEXv2Client:
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get('code') == 0 or data.get('success'):
+                # Handle both list responses and dict responses
+                if isinstance(data, list):
+                    positions = data
+                elif data.get('code') == 0 or data.get('success'):
                     positions = data.get('data', [])
-                    
-                    # Check if any position has non-zero size
-                    for pos in positions:
-                        if pos.get('symbol') == symbol and float(pos.get('size', 0)) > 0:
-                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                            # Store position for TP/SL tracking
-                            self.open_positions[symbol] = pos
-                            return True
-                    
-                    # No position found
-                    if symbol in self.open_positions:
-                        del self.open_positions[symbol]
-                    return False
                 else:
                     logger.error(f"❌ Get positions error: {data.get('message', 'Unknown error')}")
                     return False
+                
+                # Check if any position has non-zero size
+                for pos in positions:
+                    if pos.get('symbol') == symbol and float(pos.get('size', 0)) > 0:
+                        logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
+                        # Store position for TP/SL tracking
+                        self.open_positions[symbol] = pos
+                        return True
+                
+                # No position found
+                if symbol in self.open_positions:
+                    del self.open_positions[symbol]
+                return False
             else:
                 logger.error(f"❌ HTTP {response.status_code}: {response.text}")
                 return False
