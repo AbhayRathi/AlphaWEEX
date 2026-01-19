@@ -43,7 +43,7 @@ def test_leverage_endpoint():
         call_args = mock_post.call_args
         url = call_args[0][0]
         
-        if "/capi/v2/account/setLeverage" not in url:
+        if "/api/v2/account/set-leverage" not in url:
             print(f"   ❌ FAILED: Wrong endpoint path: {url}")
             return False
         
