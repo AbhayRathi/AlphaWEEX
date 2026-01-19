@@ -21,10 +21,10 @@ This document describes the API endpoint fixes applied to resolve 404/400 errors
   - "Already set" responses are treated as success
 
 ### Previous Implementation (Incorrect)
-- **Path:** `/capi/v2/account/leverage` ❌
-- **Path (Old Fix):** `/capi/v2/account/setLeverage` ❌ (CamelCase)
-- **Path (Old Fix 2):** `/api/v2/account/set-leverage` ❌ (wrong prefix)
-- **Body:** `{"symbol": "cmt_btcusdt", "marginMode": "isolated", "leverage": "10"}` ❌
+- **Path:** `/capi/v2/account/leverage` ❌ (original incorrect path)
+- **Path (Old Fix):** `/capi/v2/account/setLeverage` ❌ (CamelCase - intermediate fix attempt)
+- **Path (Old Fix 2):** `/api/v2/account/set-leverage` ❌ (wrong prefix - intermediate fix attempt)
+- **Body:** `{"symbol": "cmt_btcusdt", "marginMode": "isolated", "leverage": "10"}` ❌ (string types)
 
 ### Why This Fix Was Needed
 The WEEX API v2 for AI Wars Competition requires:

@@ -454,6 +454,7 @@ class WEEXv2Client:
             path = "/capi/v2/account/set-leverage"
             # Map margin mode to integer: 1 for Isolated, 2 for Cross
             margin_mode_int = 1 if margin_mode.lower() == "isolated" else 2
+            # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
             body = {
                 "symbol": symbol,
                 "leverage": int(leverage),
