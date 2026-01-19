@@ -216,7 +216,8 @@ class WEEXv2Client:
             raise
     
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List]:
-            """
+        symbol = symbol.replace('cmt_', '').upper()    
+        """
             Get K-lines (candlestick) data from WEEX
             Endpoint: GET /capi/v2/market/candles
             
@@ -263,6 +264,7 @@ class WEEXv2Client:
                 return []
     
     def get_funding_rate(self, symbol: str) -> Optional[float]:
+        symbol = symbol.replace('cmt_', '').upper()
         """
         Get current funding rate for a symbol from WEEX
         Endpoint: GET /capi/v2/market/funding-rate?symbol={symbol}
