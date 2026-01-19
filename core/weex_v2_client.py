@@ -445,10 +445,13 @@ class WEEXv2Client:
         Args:
             symbol: Trading symbol
             leverage: Leverage value (default: 20)
-            margin_mode: Margin mode - "isolated" or "cross" (default: "isolated")
+            margin_mode: Margin mode parameter (IGNORED - API requires Cross mode)
             
         Returns:
             True if successful, False otherwise
+            
+        Note:
+            The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
         try:
             path = "/capi/v2/account/setLeverage"
