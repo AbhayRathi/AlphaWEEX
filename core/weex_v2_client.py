@@ -480,112 +480,83 @@ class WEEXv2Client:
                 return None
     
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
-        symbol = symbol.replace('cmt_', '').upper()
-        """
-        Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/position/setLeverage
-        
-        Args:
-            symbol: Trading symbol
-            leverage: Leverage value (default: 20)
-            margin_mode: Margin mode parameter (IGNORED - API requires Cross mode)
+            symbol = symbol.replace('cmt_', '').upper()
             
-        Returns:
-            True if successful, False otherwise
-            
-        Note:
-            The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
-        """
-        
-        try:
-            path = "/capi/v2/account/position/setLeverage"
-            # Always use marginMode 2 (Cross) as per requirements
-            # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
-            body = {
-                "symbol": symbol,
-                "leverage": int(leverage),
-                "marginMode": 2  # Integer: 2 for Cross (required by API)
-            }
-            
-            response = self.send_weex_request("POST", path, body=body)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == 0 or data.get('success'):
-                    logger.info(f"✅ Leverage set to {leverage}x for {symbol}")
-                    return True
-                else:
-                    error_msg = str(data.get('message', 'Unknown error')).lower()
-                    # Ignore "no change needed" and similar errors (WEEX returns error when already set)
-                    if "already set" in error_msg or "no change" in error_msg or "same" in error_msg:
-                        logger.info(f"✅ Leverage already at {leverage}x for {symbol} (no change needed)")
-                        return True
-                    else:
-                        logger.error(f"❌ Set leverage error: {data.get('message', 'Unknown error')}")
-                        return False
-            else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                return False
+            try:
+                path = "/capi/v2/account/position/setLeverage"
+                # WEEX V2 requires leverage as INT and marginMode as 2 (Cross)
+                body = {
+                    "symbol": symbol,
+                    "leverage": int(leverage),
+                    "marginMode": 2 
+                }
                 
-        except Exception as e:
-            # Ignore "no change needed" type errors in exception messages
-            error_str = str(e).lower()
-            if "no change" in error_str or "already set" in error_str or "same" in error_str:
-                logger.info(f"✅ Leverage already configured for {symbol} (ignoring error: {str(e)})")
-                return True
-            logger.error(f"Failed to set leverage for {symbol}: {str(e)}")
-            return False
+                response = self.send_weex_request("POST", path, body=body)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    # code 0 or success=True are both valid "OK" signals
+                    if data.get('code') == 0 or data.get('code') == '00000' or data.get('success'):
+                        logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
+                        return True
+                    
+                    # Handle "no change" error as a success
+                    msg = str(data.get('message', '')).lower()
+                    if "already set" in msg or "no change" in msg:
+                        return True
+                        
+                    logger.error(f"❌ Leverage API Error: {data.get('message')}")
+                    return False
+                return False
+            except Exception as e:
+                logger.error(f"❌ Leverage Exception: {str(e)}")
+                return False
     
     def has_open_position(self, symbol: str) -> bool:
-        symbol = symbol.replace('cmt_', '').upper()
-        """
-        Check if there's an open position for a symbol
-        Endpoint: GET /capi/v2/account/position/allPosition
-        
-        Args:
-            symbol: Trading symbol
+            # 1. Clean symbol first
+            symbol = symbol.replace('cmt_', '').upper()
             
-        Returns:
-            True if position exists, False otherwise
-        """
-        
-        try:
-            path = "/capi/v2/account/position/allPosition"
-            query_params = f"?symbol={symbol}" if symbol else ""
-            logger.debug(f"Position check path: {path}")
-            
-            response = self.send_weex_request("GET", path, query_params)
-            
-            if response.status_code == 200:
-                response_data = response.json()
-                # The API returns a raw list [{}]. Handle both list and dict formats safely:
-                positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
+            try:
+                path = "/capi/v2/account/position/allPosition"
+                # Optional: API works better if we don't pass symbol in query for this specific endpoint
+                query_params = "" 
                 
-                # Check if any position has non-zero size
-                # Note: API returns cleaned symbols (e.g., "BTCUSDT"), so we compare with symbol
-                for pos in positions:
-                    try:
-                        size = float(pos.get('size', 0))
-                        if pos.get('symbol') == symbol and size > 0:
-                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                            # Store position using the symbol
-                            self.open_positions[symbol] = pos
-                            return True
-                    except (ValueError, TypeError):
-                        # Skip positions with invalid size values
-                        continue
+                response = self.send_weex_request("GET", path, query_params)
                 
-                # No position found
-                if symbol in self.open_positions:
-                    del self.open_positions[symbol]
+                if response.status_code == 200:
+                    response_data = response.json()
+                    
+                    # FIX: Handle the case where WEEX returns a raw list [] instead of a data dict
+                    if isinstance(response_data, list):
+                        positions = response_data
+                    elif isinstance(response_data, dict):
+                        positions = response_data.get('data', [])
+                    else:
+                        positions = []
+                    
+                    for pos in positions:
+                        try:
+                            # Extract and compare
+                            pos_symbol = str(pos.get('symbol', '')).upper()
+                            size = float(pos.get('size', 0))
+                            
+                            if pos_symbol == symbol and size > 0:
+                                logger.info(f"📊 Open position found for {symbol}: {size} units")
+                                self.open_positions[symbol] = pos
+                                return True
+                        except (ValueError, TypeError):
+                            continue
+                    
+                    if symbol in self.open_positions:
+                        del self.open_positions[symbol]
+                    return False
+                else:
+                    logger.error(f"❌ Position Check Failed (HTTP {response.status_code}): {response.text}")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"❌ Exception in has_open_position: {str(e)}")
                 return False
-            else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Failed to check position for {symbol}: {str(e)}")
-            return False
     
     def place_market_order(self, symbol: str, side: str, size: float,
                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
