@@ -66,7 +66,8 @@ class WEEXv2Client:
         # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
         self.session = requests.Session()
         
-        # Precision settings for different symbols
+        # Precision settings for different symbols (lowercase keys)
+        # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
         self.precision_map = {
             "cmt_btcusdt": 4,   # BTC: 4 decimals
             "cmt_ethusdt": 3,   # ETH: 3 decimals
@@ -83,13 +84,17 @@ class WEEXv2Client:
         Round quantity to the correct precision for the symbol
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (lowercase for precision map lookup)
             qty: Quantity to round
             
         Returns:
             Rounded quantity
+            
+        Note:
+            This method expects lowercase symbols to match precision_map keys.
+            Symbol uppercase conversion happens separately for API calls.
         """
-        precision = self.precision_map.get(symbol)
+        precision = self.precision_map.get(symbol.lower())
         if precision is None:
             logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
             precision = 2
@@ -563,16 +568,16 @@ class WEEXv2Client:
             Order response dict or None if failed
         """
         try:
-            # Spread guard
+            # Spread guard (symbol will be converted to uppercase inside check_spread -> get_order_book)
             if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
                 logger.warning(f"🛑 Order rejected for {symbol} due to wide spread")
                 return None
             
+            # Round quantity to correct precision (uses lowercase symbol for precision map lookup)
+            size = self.round_qty(symbol, size)
+            
             # Ensure symbol is uppercase for API call
             symbol_upper = symbol.upper()
-            
-            # Round quantity to correct precision
-            size = self.round_qty(symbol, size)
             
             path = "/capi/v2/order/placeOrder"
             body = {
