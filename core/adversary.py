@@ -774,7 +774,7 @@ Respond ONLY with valid JSON, no additional text."""
                 self.deepseek_endpoint,
                 headers=headers,
                 json=payload,
-                timeout=10
+                timeout=30
             )
             
             if response.status_code == 200:
