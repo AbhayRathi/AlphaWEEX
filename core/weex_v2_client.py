@@ -440,25 +440,27 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
-        Endpoint: POST /capi/v2/account/set-leverage
+        Endpoint: POST /capi/v2/account/setLeverage
         
         Args:
             symbol: Trading symbol
             leverage: Leverage value (default: 20)
-            margin_mode: Margin mode - "isolated" or "cross" (default: "isolated")
+            margin_mode: Margin mode parameter (IGNORED - API requires Cross mode)
             
         Returns:
             True if successful, False otherwise
+            
+        Note:
+            The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
         try:
-            path = "/capi/v2/account/set-leverage"
-            # Map margin mode to integer: 1 for Isolated, 2 for Cross
-            margin_mode_int = 1 if margin_mode.lower() == "isolated" else 2
+            path = "/capi/v2/account/setLeverage"
+            # Always use marginMode 2 (Cross) as per requirements
             # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
             body = {
                 "symbol": symbol,
                 "leverage": int(leverage),
-                "marginMode": margin_mode_int  # Integer: 1 for Isolated, 2 for Cross
+                "marginMode": 2  # Integer: 2 for Cross (required by API)
             }
             
             response = self.send_weex_request("POST", path, body=body)
@@ -493,8 +495,7 @@ class WEEXv2Client:
     def has_open_position(self, symbol: str) -> bool:
         """
         Check if there's an open position for a symbol
-        Endpoint: GET /capi/v2/account/all-position
-        Fallback: GET /capi/v2/account/position/all-position (if 404)
+        Endpoint: GET /capi/v2/account/position/allPosition
         
         Args:
             symbol: Trading symbol
@@ -503,18 +504,11 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
-            path = "/capi/v2/account/all-position"
+            path = "/capi/v2/account/position/allPosition"
             query_params = f"?symbol={symbol}" if symbol else ""
             logger.debug(f"Position check path: {path}")
             
             response = self.send_weex_request("GET", path, query_params)
-            
-            # If 404, try fallback endpoint
-            if response.status_code == 404:
-                logger.warning(f"⚠️ Primary position endpoint returned 404, trying fallback...")
-                path = "/capi/v2/account/position/all-position"
-                logger.debug(f"Position check fallback path: {path}")
-                response = self.send_weex_request("GET", path, query_params)
             
             if response.status_code == 200:
                 data = response.json()
