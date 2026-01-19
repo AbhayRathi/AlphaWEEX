@@ -78,7 +78,7 @@ EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
 MAIN_LOOP_INTERVAL = 10  # Check every 10 seconds (Alpha-Apex aggressive mode)
-MIN_CONFIDENCE = 0.75  # Alpha-Apex: Minimum confidence threshold
+MIN_CONFIDENCE = 0.64  # Alpha-Apex: Minimum confidence threshold
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
