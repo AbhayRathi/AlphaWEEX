@@ -50,8 +50,9 @@ def test_leverage_endpoint():
         # Check body format
         body_data = json.loads(call_args[1]['data'])
         
-        if body_data.get('symbol') != "cmt_btcusdt":
-            print(f"   ❌ FAILED: Wrong symbol: {body_data.get('symbol')}")
+        # Symbol should be uppercase per the API requirements
+        if body_data.get('symbol') != "CMT_BTCUSDT":
+            print(f"   ❌ FAILED: Wrong symbol: {body_data.get('symbol')} (expected CMT_BTCUSDT)")
             return False
         
         if body_data.get('marginMode') != 2:
@@ -134,6 +135,11 @@ def test_granularity_parameter():
         # Check the URL
         call_args = mock_get.call_args
         url = call_args[0][0]
+        
+        # Symbol should be uppercase in the URL
+        if "CMT_BTCUSDT" not in url:
+            print(f"   ❌ FAILED: URL should contain uppercase symbol 'CMT_BTCUSDT': {url}")
+            return False
         
         if "granularity=1m" not in url:
             print(f"   ❌ FAILED: URL should contain 'granularity=1m': {url}")
