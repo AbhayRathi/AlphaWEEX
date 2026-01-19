@@ -17,7 +17,6 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-
 class WEEXv2Client:
     """
     WEEX v2 API Client with verified authentication
@@ -68,7 +67,6 @@ class WEEXv2Client:
         
         # Precision settings for different symbols (lowercase keys)
         # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
-        # Map includes both cmt_prefixed and clean formats for compatibility
         self.precision_map = {
             "cmt_btcusdt": 4,   # BTC: 4 decimals
             "btcusdt": 4,       # BTC: 4 decimals (clean format)
@@ -91,20 +89,6 @@ class WEEXv2Client:
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
         Clean symbol for API calls: remove 'cmt_' prefix and convert to UPPERCASE
-        
-        Args:
-            symbol: Trading symbol (may have 'cmt_' prefix, any case, or None)
-            
-        Returns:
-            str: Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT')
-                 Returns empty string if symbol is None or empty
-            
-        Example:
-            clean_symbol('cmt_btcusdt') -> 'BTCUSDT'
-            clean_symbol('cmt_ETHUSDT') -> 'ETHUSDT'
-            clean_symbol('SOLUSDT') -> 'SOLUSDT'
-            clean_symbol(None) -> ''
-            clean_symbol('') -> ''
         """
         if not symbol:
             return ""
@@ -113,17 +97,6 @@ class WEEXv2Client:
     def round_qty(self, symbol: str, qty: float) -> float:
         """
         Round quantity to the correct precision for the symbol
-        
-        Args:
-            symbol: Trading symbol (lowercase for precision map lookup)
-            qty: Quantity to round
-            
-        Returns:
-            Rounded quantity
-            
-        Note:
-            This method expects lowercase symbols to match precision_map keys.
-            Symbol uppercase conversion happens separately for API calls.
         """
         if not symbol:
             logger.warning(f"⚠️ Invalid symbol: {symbol}, using default 2 decimals")
@@ -131,24 +104,14 @@ class WEEXv2Client:
         else:
             precision = self.precision_map.get(symbol.lower())
             if precision is None:
-                logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+                # logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
                 precision = 2
         return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
-                          query_string: str, body_str: str) -> str:
+                           query_string: str, body_str: str) -> str:
         """
         Generate HMAC SHA256 signature for WEEX API (Base64 encoded)
-        
-        Args:
-            timestamp: Request timestamp in milliseconds
-            method: HTTP method (GET, POST, etc.)
-            request_path: API endpoint path
-            query_string: Query parameters string
-            body_str: Request body as JSON string
-            
-        Returns:
-            Base64 encoded signature
         """
         message = timestamp + method.upper() + request_path + query_string + body_str
         signature = hmac.new(
@@ -159,18 +122,9 @@ class WEEXv2Client:
         return base64.b64encode(signature).decode()
     
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
-                         body: Optional[Dict] = None) -> requests.Response:
+                          body: Optional[Dict] = None) -> requests.Response:
         """
         Send authenticated request to WEEX API
-        
-        Args:
-            method: HTTP method (GET, POST)
-            path: API endpoint path
-            query_params: Query parameters string (e.g., "?symbol=cmt_btcusdt")
-            body: Request body dict (for POST requests)
-            
-        Returns:
-            Response object
         """
         # Check for 521 cooldown
         if time.time() - self.last_521_error_time < self.cooldown_seconds:
@@ -192,7 +146,7 @@ class WEEXv2Client:
         }
         
         url = f"{self.BASE_URL}{path}{query_params}"
-        logger.info(f"🚀 Attempting request to: {url}")
+        # logger.info(f"🚀 Attempting request to: {url}")
         
         try:
             if method.upper() == "GET":
@@ -214,123 +168,143 @@ class WEEXv2Client:
         except Exception as e:
             logger.error(f"❌ Request failed: {str(e)}")
             raise
-    
+
+    # -------------------------------------------------------------------------
+    # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
+    # -------------------------------------------------------------------------
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List[float]]:
-            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-            symbol = symbol.lower()
-            if not symbol.startswith("cmt_"):
-                symbol = f"cmt_{symbol}"
-    
-            """
-            Get K-lines (candlestick) data from WEEX
-            Endpoint: GET /capi/v2/market/candles
-            """
-            try:
-                import urllib.parse
-                path = "/capi/v2/market/candles"
+        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+        symbol = symbol.lower()
+        if not symbol.startswith("cmt_"):
+            symbol = f"cmt_{symbol}"
+
+        """
+        Get K-lines (candlestick) data from WEEX
+        Endpoint: GET /capi/v2/market/candles
+        """
+        try:
+            path = "/capi/v2/market/candles"
+            
+            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
                 
-                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+                raw_list = []
+                if isinstance(data, list):
+                    raw_list = data
+                elif isinstance(data, dict) and data.get('code') == '00000':
+                    raw_list = data.get('data', [])
                 
-                response = self.send_weex_request("GET", path, query_params)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    raw_list = []
-                    if isinstance(data, list):
-                        raw_list = data
-                    elif isinstance(data, dict) and data.get('code') == '00000':
-                        raw_list = data.get('data', [])
-                    
-                    # CRITICAL FIX: Convert Strings to Floats, but KEEP LIST FORMAT
-                    # WEEX V2 Format: [timestamp, open, high, low, close, volume, ...]
-                    formatted_candles = []
-                    for candle in raw_list:
-                        if len(candle) >= 6: 
-                            try:
-                                formatted_candles.append([
-                                    int(candle[0]),     # 0: Timestamp
-                                    float(candle[1]),   # 1: Open
-                                    float(candle[2]),   # 2: High
-                                    float(candle[3]),   # 3: Low
-                                    float(candle[4]),   # 4: Close
-                                    float(candle[5])    # 5: Volume
-                                ])
-                            except (ValueError, IndexError):
-                                continue # Skip bad candles
-                                
-                    if formatted_candles:
-                        return formatted_candles
-                    else:
-                        return []
+                # CRITICAL FIX: Convert Strings to Floats
+                formatted_candles = []
+                for candle in raw_list:
+                    if len(candle) >= 6: 
+                        try:
+                            formatted_candles.append([
+                                int(candle[0]),     # 0: Timestamp
+                                float(candle[1]),   # 1: Open
+                                float(candle[2]),   # 2: High
+                                float(candle[3]),   # 3: Low
+                                float(candle[4]),   # 4: Close
+                                float(candle[5])    # 5: Volume
+                            ])
+                        except (ValueError, IndexError):
+                            continue # Skip bad candles
+                            
+                if formatted_candles:
+                    return formatted_candles
                 else:
-                    logger.error(f"❌ HTTP {response.status_code} for {symbol}: {response.text}")
                     return []
-                    
-            except Exception as e:
-                logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
+            else:
+                logger.error(f"❌ HTTP {response.status_code} for {symbol}: {response.text}")
                 return []
-    
-    def get_funding_rate(self, symbol: str) -> Optional[float]:
-            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-            symbol = symbol.lower()
-            if not symbol.startswith("cmt_"):
-                symbol = f"cmt_{symbol}"
-    
-            """
-            Get current funding rate for a symbol from WEEX
-            Endpoint: GET /capi/v2/market/funding-rate
-            """
-            try:
-                import urllib.parse
-                path = "/capi/v2/market/funding-rate"
                 
-                # Note: We use the locally fixed 'symbol' here
-                query_params = f"?symbol={urllib.parse.quote(symbol)}"
-                
-                response = self.send_weex_request("GET", path, query_params)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('code') == '00000' or data.get('success') is True:
-                        funding_data = data.get('data', {})
-                        
-                        # Extract funding rate - handle likely field names
-                        funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
-                        
-                        if funding_rate is not None:
-                            funding_rate_float = float(funding_rate)
-                            # Normalize to percentage if it's a raw decimal (e.g. 0.0001 -> 0.01)
-                            funding_rate_pct = funding_rate_float * 100 if abs(funding_rate_float) < 1 else funding_rate_float
-                            return funding_rate_pct
-                        else:
-                            return 0.0001 # Default fallback
-                    else:
-                        return 0.0001 # Default fallback
-                else:
-                    return 0.0001 # Default fallback
+        except Exception as e:
+            logger.error(f"Failed to get K-lines for {symbol}: {str(e)}")
+            return []
+
+    # -------------------------------------------------------------------------
+    # CRITICAL FIX 2: Funding Rate (Returns Float, not String)
+    # -------------------------------------------------------------------------
+    def get_funding_rate(self, symbol: str) -> float:
+        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+        symbol = symbol.lower()
+        if not symbol.startswith("cmt_"):
+            symbol = f"cmt_{symbol}"
+
+        """
+        Get current funding rate for a symbol from WEEX
+        """
+        try:
+            path = "/capi/v2/market/funding-rate"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == '00000' or data.get('success') is True:
+                    funding_data = data.get('data', {})
                     
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to get funding rate for {symbol}: {str(e)}, using default fallback")
-                return 0.0001
-    
+                    # Extract funding rate - handle likely field names
+                    funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
+                    
+                    if funding_rate is not None:
+                        # FIX: Return raw float. 
+                        return float(funding_rate)
+                    
+            return 0.0 # Default fallback
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get funding rate for {symbol}: {str(e)}, using default fallback")
+            return 0.0
+
+    # -------------------------------------------------------------------------
+    # CRITICAL FIX 3: Market Price (Fixes "Shadow Mode" / BTC $90k issue)
+    # -------------------------------------------------------------------------
+    def get_market_price(self, symbol: str) -> float:
+        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+        symbol = symbol.lower()
+        if not symbol.startswith("cmt_"):
+            symbol = f"cmt_{symbol}"
+
+        try:
+            # We use the ticker endpoint for the latest price
+            path = "/capi/v2/market/ticker"
+            query_params = f"?symbol={symbol}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Check for successful code '00000'
+                if data.get('code') == '00000' and 'data' in data:
+                    # FIX: Force convert string to float. 
+                    price_data = data['data']
+                    price = price_data.get('close') or price_data.get('last') or 0.0
+                    return float(price)
+                    
+                # Fallback for different API structure
+                elif isinstance(data, dict) and 'close' in data:
+                    return float(data['close'])
+                    
+            logger.warning(f"⚠️ Could not fetch price for {symbol}")
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error fetching price for {symbol}: {str(e)}")
+            return 0.0
+
     def get_order_book(self, symbol: str, depth: int = 5) -> Optional[Dict[str, Any]]:
         """
         Get order book (market depth) from WEEX
-        Endpoint: GET /capi/v2/market/depth
-        
-        Args:
-            symbol: Trading symbol (e.g., "cmt_btcusdt")
-            depth: Order book depth (default: 5)
-            
-        Returns:
-            Dictionary with bids and asks, or None if failed
         """
         try:
-            import urllib.parse
             # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
             symbol_clean = self.clean_symbol(symbol)
-            logger.debug(f"Fetching order book for symbol: {symbol_clean}")
             
             path = "/capi/v2/market/depth"
             query_params = f"?symbol={urllib.parse.quote(symbol_clean)}&depth={depth}"
@@ -341,13 +315,10 @@ class WEEXv2Client:
                 data = response.json()
                 if data.get('code') == 0 or data.get('success'):
                     order_book = data.get('data', {})
-                    logger.debug(f"✅ Retrieved order book for {symbol}")
                     return order_book
                 else:
-                    logger.error(f"❌ Order book error: {data.get('message', 'Unknown error')}")
                     return None
             else:
-                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
                 return None
                 
         except Exception as e:
@@ -355,50 +326,37 @@ class WEEXv2Client:
             return None
     
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
-            # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-            symbol = symbol.lower()
-            if not symbol.startswith("cmt_"):
-                symbol = f"cmt_{symbol}"
-    
-            """
-            Get ticker (24h stats) from WEEX
-            Endpoint: GET /capi/v2/market/ticker
-            """
-            try:
-                import urllib.parse
-                # logger.debug(f"Fetching ticker for symbol: {symbol}")
-                
-                path = "/capi/v2/market/ticker"
-                query_params = f"?symbol={urllib.parse.quote(symbol)}"
-                
-                response = self.send_weex_request("GET", path, query_params)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('code') == '00000' or data.get('success') is True:
-                        ticker_data = data.get('data', {})
-                        # logger.debug(f"✅ Retrieved ticker for {symbol}")
-                        return ticker_data
-                    else:
-                        # logger.error(f"❌ Ticker error: {data.get('msg', 'Unknown error')}")
-                        return None
+        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
+        symbol = symbol.lower()
+        if not symbol.startswith("cmt_"):
+            symbol = f"cmt_{symbol}"
+
+        """
+        Get ticker (24h stats) from WEEX
+        """
+        try:
+            path = "/capi/v2/market/ticker"
+            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('code') == '00000' or data.get('success') is True:
+                    ticker_data = data.get('data', {})
+                    return ticker_data
                 else:
-                    # logger.error(f"❌ HTTP {response.status_code}: {response.text}")
                     return None
-                    
-            except Exception as e:
-                logger.error(f"Failed to get ticker for {symbol}: {str(e)}")
+            else:
                 return None
-        
+                
+        except Exception as e:
+            logger.error(f"Failed to get ticker for {symbol}: {str(e)}")
+            return None
+    
     def _extract_price_from_order(self, order: Any) -> float:
         """
         Extract price from order book entry (handles both list and dict formats)
-        
-        Args:
-            order: Order entry (either [price, size] or {"price": x, "size": y})
-            
-        Returns:
-            Price as float, or 0.0 if extraction fails
         """
         try:
             if isinstance(order, list):
@@ -412,13 +370,6 @@ class WEEXv2Client:
     def check_spread(self, symbol: str, max_spread_pct: float = 0.1) -> bool:
         """
         Check if spread is acceptable (Spread Guard)
-        
-        Args:
-            symbol: Trading symbol
-            max_spread_pct: Maximum acceptable spread in percentage (default: 0.1%)
-            
-        Returns:
-            True if spread is acceptable, False otherwise
         """
         try:
             order_book = self.get_order_book(symbol, depth=1)
@@ -448,7 +399,6 @@ class WEEXv2Client:
                 logger.warning(f"🛑 Spread too wide for {symbol}: {spread_pct:.3f}% > {max_spread_pct}%")
                 return False
             
-            logger.debug(f"✅ Spread OK for {symbol}: {spread_pct:.3f}%")
             return True
             
         except Exception as e:
@@ -456,123 +406,110 @@ class WEEXv2Client:
             return True  # Allow trade on error (failsafe)
     
     def get_account_balance(self) -> Optional[Dict[str, Any]]:
-            try:
-                path = "/capi/v2/account/accounts?productType=umcbl"
-                response = self.send_weex_request("GET", path)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    collateral_list = data.get('collateral', [])
-                    if collateral_list:
-                        for item in collateral_list:
-                            # Ensure we are looking at the USDT wallet (coin_id 2)
-                            if str(item.get('coin_id')) == "2":
-                                balance_value = item.get('amount')
-                                logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
-                                return item
+        try:
+            path = "/capi/v2/account/accounts?productType=umcbl"
+            response = self.send_weex_request("GET", path)
+            
+            if response.status_code == 200:
+                data = response.json()
+                collateral_list = data.get('collateral', [])
+                if collateral_list:
+                    for item in collateral_list:
+                        # Ensure we are looking at the USDT wallet (coin_id 2)
+                        if str(item.get('coin_id')) == "2":
+                            balance_value = item.get('amount')
+                            logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
+                            return item
                     
-                    # If no list found, return a safe structure so .get('amount') doesn't crash
-                    return {"amount": "0.00"} 
-                return None
-            except Exception as e:
-                logger.error(f"Balance parsing error: {str(e)}")
-                return None
+                # If no list found, return a safe structure so .get('amount') doesn't crash
+                return {"amount": "0.00"} 
+            return None
+        except Exception as e:
+            logger.error(f"Balance parsing error: {str(e)}")
+            return None
     
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
-            symbol = symbol.replace('cmt_', '').upper()
+        symbol = symbol.replace('cmt_', '').upper()
+        
+        try:
+            path = "/capi/v2/account/position/setLeverage"
+            # WEEX V2 requires leverage as INT and marginMode as 2 (Cross)
+            body = {
+                "symbol": symbol,
+                "leverage": int(leverage),
+                "marginMode": 2 
+            }
             
-            try:
-                path = "/capi/v2/account/position/setLeverage"
-                # WEEX V2 requires leverage as INT and marginMode as 2 (Cross)
-                body = {
-                    "symbol": symbol,
-                    "leverage": int(leverage),
-                    "marginMode": 2 
-                }
+            response = self.send_weex_request("POST", path, body=body)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # code 0 or success=True are both valid "OK" signals
+                if data.get('code') == 0 or data.get('code') == '00000' or data.get('success'):
+                    logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
+                    return True
                 
-                response = self.send_weex_request("POST", path, body=body)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    # code 0 or success=True are both valid "OK" signals
-                    if data.get('code') == 0 or data.get('code') == '00000' or data.get('success'):
-                        logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
-                        return True
+                # Handle "no change" error as a success
+                msg = str(data.get('message', '')).lower()
+                if "already set" in msg or "no change" in msg:
+                    return True
                     
-                    # Handle "no change" error as a success
-                    msg = str(data.get('message', '')).lower()
-                    if "already set" in msg or "no change" in msg:
-                        return True
-                        
-                    logger.error(f"❌ Leverage API Error: {data.get('message')}")
-                    return False
+                logger.error(f"❌ Leverage API Error: {data.get('message')}")
                 return False
-            except Exception as e:
-                logger.error(f"❌ Leverage Exception: {str(e)}")
-                return False
+            return False
+        except Exception as e:
+            logger.error(f"❌ Leverage Exception: {str(e)}")
+            return False
     
     def has_open_position(self, symbol: str) -> bool:
-            # 1. Clean symbol first
-            symbol = symbol.replace('cmt_', '').upper()
+        # 1. Clean symbol first
+        symbol = symbol.replace('cmt_', '').upper()
+        
+        try:
+            path = "/capi/v2/account/position/allPosition"
+            # Optional: API works better if we don't pass symbol in query for this specific endpoint
+            query_params = "" 
             
-            try:
-                path = "/capi/v2/account/position/allPosition"
-                # Optional: API works better if we don't pass symbol in query for this specific endpoint
-                query_params = "" 
+            response = self.send_weex_request("GET", path, query_params)
+            
+            if response.status_code == 200:
+                response_data = response.json()
                 
-                response = self.send_weex_request("GET", path, query_params)
-                
-                if response.status_code == 200:
-                    response_data = response.json()
-                    
-                    # FIX: Handle the case where WEEX returns a raw list [] instead of a data dict
-                    if isinstance(response_data, list):
-                        positions = response_data
-                    elif isinstance(response_data, dict):
-                        positions = response_data.get('data', [])
-                    else:
-                        positions = []
-                    
-                    for pos in positions:
-                        try:
-                            # Extract and compare
-                            pos_symbol = str(pos.get('symbol', '')).upper()
-                            size = float(pos.get('size', 0))
-                            
-                            if pos_symbol == symbol and size > 0:
-                                logger.info(f"📊 Open position found for {symbol}: {size} units")
-                                self.open_positions[symbol] = pos
-                                return True
-                        except (ValueError, TypeError):
-                            continue
-                    
-                    if symbol in self.open_positions:
-                        del self.open_positions[symbol]
-                    return False
+                # FIX: Handle the case where WEEX returns a raw list [] instead of a data dict
+                if isinstance(response_data, list):
+                    positions = response_data
+                elif isinstance(response_data, dict):
+                    positions = response_data.get('data', [])
                 else:
-                    logger.error(f"❌ Position Check Failed (HTTP {response.status_code}): {response.text}")
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"❌ Exception in has_open_position: {str(e)}")
+                    positions = []
+                
+                for pos in positions:
+                    try:
+                        # Extract and compare
+                        pos_symbol = str(pos.get('symbol', '')).upper()
+                        size = float(pos.get('size', 0))
+                        
+                        if pos_symbol == symbol and size > 0:
+                            logger.info(f"📊 Open position found for {symbol}: {size} units")
+                            self.open_positions[symbol] = pos
+                            return True
+                    except (ValueError, TypeError):
+                        continue
+                
+                if symbol in self.open_positions:
+                    del self.open_positions[symbol]
                 return False
+            else:
+                logger.error(f"❌ Position Check Failed (HTTP {response.status_code}): {response.text}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Exception in has_open_position: {str(e)}")
+            return False
     
     def place_market_order(self, symbol: str, side: str, size: float,
-                          check_spread: bool = True) -> Optional[Dict[str, Any]]:
+                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
         symbol = symbol.replace('cmt_', '').upper()
-        """
-        Place a market order with precision rounding and spread check
-        Endpoint: POST /capi/v2/order/placeOrder
-        
-        Args:
-            symbol: Trading symbol
-            side: Order side ("BUY" or "SELL")
-            size: Order size
-            check_spread: Whether to check spread before placing order
-            
-        Returns:
-            Order response dict or None if failed
-        """
         
         try:
             # Spread guard (symbol is already cleaned/uppercase at this point)
@@ -612,17 +549,6 @@ class WEEXv2Client:
     def check_tp_sl_triggers(self, symbol: str, current_price: float) -> Optional[str]:
         """
         Alpha-Apex: Check multi-tier profit targets and dynamic stop loss
-        - At +0.25% profit: Sell 50% of position and move Stop Loss to break-even
-        - At +0.50% profit: Re-buy 10% of realized profit to "let it ride"
-        - Stop Loss: Initially 1%, then break-even after first target
-        
-        Args:
-            symbol: Trading symbol
-            current_price: Current market price
-            
-        Returns:
-            "PARTIAL_1" for first partial at +0.25%, "PARTIAL_2" for reinvestment at +0.50%, 
-            "SL" if stop loss triggered, None otherwise
         """
         symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
@@ -648,7 +574,7 @@ class WEEXv2Client:
         
         state = self.position_scaling_state[symbol]
         
-        # Alpha-Apex targets (fee-adjusted) - defined as class constants
+        # Alpha-Apex targets (fee-adjusted)
         FIRST_TARGET_PCT = self.FIRST_TARGET_PCT
         SECOND_TARGET_PCT = self.SECOND_TARGET_PCT
         INITIAL_SL_LONG_PCT = self.INITIAL_SL_LONG_PCT
@@ -674,11 +600,9 @@ class WEEXv2Client:
             
             # Check profit targets
             if not state["reinvested"] and state["partial_taken"] and price_change_pct >= SECOND_TARGET_PCT:
-                # Second target: Re-invest 10% of realized profit
                 logger.info(f"🎯 Alpha-Apex: Second target hit for {symbol}: {price_change_pct:.2f}% (re-investment)")
                 return "PARTIAL_2"
             elif not state["partial_taken"] and price_change_pct >= FIRST_TARGET_PCT:
-                # First target: Take 50% profit, move SL to break-even
                 logger.info(f"🎯 Alpha-Apex: First target hit for {symbol}: {price_change_pct:.2f}% (partial profit)")
                 return "PARTIAL_1"
         
@@ -693,7 +617,7 @@ class WEEXv2Client:
                     logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}%")
                     return "SL"
             else:
-                # Initial stop loss (0.40% for shorts - tighter due to unlimited upside risk)
+                # Initial stop loss (0.40% for shorts)
                 if short_pnl_pct <= -INITIAL_SL_SHORT_PCT:
                     logger.warning(f"🛑 SHORT Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}% loss (threshold: {INITIAL_SL_SHORT_PCT:.2f}%)")
                     return "SL"
@@ -711,12 +635,6 @@ class WEEXv2Client:
     def close_position(self, symbol: str) -> bool:
         """
         Close an open position (market order)
-        
-        Args:
-            symbol: Trading symbol
-            
-        Returns:
-            True if successful, False otherwise
         """
         symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
@@ -743,44 +661,30 @@ class WEEXv2Client:
     def close_partial_position(self, symbol: str, percentage: float) -> Optional[Dict[str, Any]]:
         """
         Alpha-Apex: Close a partial position (e.g., 50% at first target)
-        
-        Args:
-            symbol: Trading symbol
-            percentage: Percentage of position to close (0.0 to 1.0)
-            
-        Returns:
-            Order result dict or None if failed
         """
         symbol = symbol.replace('cmt_', '').upper()
         if symbol not in self.open_positions:
-            logger.warning(f"⚠️ No position to partially close for {symbol}")
             return None
         
         position = self.open_positions[symbol]
-        total_size = abs(float(position.get('size', 0)))
-        partial_size = total_size * percentage
-        partial_size = self.round_qty(symbol, partial_size)
+        current_size = abs(float(position.get('size', 0)))
         
-        if partial_size <= 0:
-            logger.warning(f"⚠️ Partial size too small for {symbol}: {partial_size}")
-            return None
+        # Calculate size to close
+        close_size = current_size * (percentage / 100.0)
+        close_size = self.round_qty(symbol, close_size)
         
+        # Determine side (opposite of position)
         side = "SELL" if position.get('side') == "LONG" else "BUY"
         
-        logger.info(f"📉 Alpha-Apex: Closing {percentage*100:.0f}% ({partial_size} of {total_size}) for {symbol}")
-        result = self.place_market_order(symbol, side, partial_size, check_spread=False)
+        logger.info(f"✂️ Closing {percentage}% of {symbol} ({close_size} units)")
+        
+        result = self.place_market_order(symbol, side, close_size)
         
         if result:
-            # Update position size in tracking
-            new_size = total_size - partial_size
-            position['size'] = str(new_size)
-            self.open_positions[symbol] = position
-            logger.info(f"✅ Partial close successful. Remaining size: {new_size}")
+            # Update internal state
+            if symbol in self.position_scaling_state:
+                self.position_scaling_state[symbol]["partial_taken"] = True
+                self.position_scaling_state[symbol]["breakeven_set"] = True
+            return result
         
-        return result
-    
-    def close_session(self):
-        """Close the persistent HTTP session"""
-        if hasattr(self, 'session'):
-            self.session.close()
-            logger.info("🔌 HTTP session closed")
+        return None
