@@ -427,24 +427,27 @@ class WEEXv2Client:
         except Exception as e:
             logger.error(f"Balance parsing error: {str(e)}")
             return None
-    
+        
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
-            # FIX: Do NOT strip 'cmt_' and do NOT uppercase. Weex V2 API expects 'cmt_btcusdt'
-            # We ensure it is lowercase just in case.
+            """
+            Sets the leverage for a specific symbol.
+            Try V2 endpoint first, then fallback to V1 if needed.
+            """
+            # Normalize symbol: Weex V2 expects 'cmt_btcusdt' (lowercase, with prefix)
             symbol = symbol.lower()
             if "cmt_" not in symbol:
-                 # Add prefix if missing, though typically the bot passes it correctly
                  symbol = f"cmt_{symbol}"
             
+            # TRY PATH 1: The most common V2 endpoint
+            path = "/capi/v2/account/setLeverage"
+            
+            body = {
+                "symbol": symbol,
+                "leverage": int(leverage),
+                "marginMode": 2  # 1=Isolated, 2=Cross (Competition rules usually require Cross)
+            }
+            
             try:
-                path = "/capi/v2/account/position/setLeverage"
-                
-                body = {
-                    "symbol": symbol,
-                    "leverage": int(leverage),
-                    "marginMode": 2 
-                }
-                
                 response = self.send_weex_request("POST", path, body=body)
                 
                 if response.status_code == 200:
@@ -453,21 +456,47 @@ class WEEXv2Client:
                         logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
                         return True
                     
-                    # Handle "no change" error as a success
+                    # Check if it says "already set"
                     msg = str(data.get('msg', '')).lower()
                     if "already" in msg or "no change" in msg:
                         return True
                         
-                    logger.error(f"❌ Leverage API Error for {symbol}: {data}")
+                    logger.error(f"❌ Leverage API Error {symbol}: {data}")
                     return False
                 
-                logger.error(f"❌ Leverage Status Code {response.status_code}: {response.text}")
+                # If 404, try the fallback path (some Weex accounts use V1 logic)
+                if response.status_code == 404:
+                    logger.warning(f"⚠️ Endpoint {path} not found. Trying fallback path...")
+                    return self._set_leverage_fallback(symbol, leverage)
+                    
+                logger.error(f"❌ Leverage Status {response.status_code}: {response.text}")
                 return False
                 
             except Exception as e:
                 logger.error(f"❌ Leverage Exception: {str(e)}")
                 return False
     
+    def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
+        """Fallback method for setting leverage if the main V2 path fails"""
+        try:
+            # Fallback Path (V1/Mix style)
+            path = "/api/v1/contract/account/set_leverage"
+            body = {
+                "symbol": symbol,
+                "leverage": int(leverage),
+                "margin_mode": 2 
+            }
+        response = self.send_weex_request("POST", path, body=body)
+                
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') or data.get('code') == '00000':
+                    logger.info(f"✅ Leverage (Fallback) confirmed at {leverage}x for {symbol}")
+                    return True
+            return False
+        except:
+            return False
+        
     def has_open_position(self, symbol: str) -> bool:
         # 1. Clean symbol first
         symbol = symbol.replace('cmt_', '').upper()
