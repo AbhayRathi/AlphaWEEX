@@ -486,7 +486,7 @@ class WEEXv2Client:
                 "leverage": int(leverage),
                 "margin_mode": 2 
             }
-        response = self.send_weex_request("POST", path, body=body)
+            response = self.send_weex_request("POST", path, body=body)
                 
             if response.status_code == 200:
                 data = response.json()
