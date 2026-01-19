@@ -523,11 +523,16 @@ class WEEXv2Client:
                 
                 # Check if any position has non-zero size
                 for pos in positions:
-                    if pos.get('symbol') == symbol and float(pos.get('size', 0)) > 0:
-                        logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                        # Store position for TP/SL tracking
-                        self.open_positions[symbol] = pos
-                        return True
+                    try:
+                        size = float(pos.get('size', 0))
+                        if pos.get('symbol') == symbol and size > 0:
+                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
+                            # Store position for TP/SL tracking
+                            self.open_positions[symbol] = pos
+                            return True
+                    except (ValueError, TypeError):
+                        # Skip positions with invalid size values
+                        continue
                 
                 # No position found
                 if symbol in self.open_positions:
