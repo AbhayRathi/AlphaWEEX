@@ -87,13 +87,15 @@ class WEEXv2Client:
             symbol: Trading symbol (may have 'cmt_' prefix, any case, or None)
             
         Returns:
-            Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT'), empty string if None
+            str: Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT')
+                 Returns empty string if symbol is None or empty
             
         Example:
             clean_symbol('cmt_btcusdt') -> 'BTCUSDT'
             clean_symbol('cmt_ETHUSDT') -> 'ETHUSDT'
             clean_symbol('SOLUSDT') -> 'SOLUSDT'
             clean_symbol(None) -> ''
+            clean_symbol('') -> ''
         """
         if not symbol:
             return ""
