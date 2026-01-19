@@ -208,11 +208,11 @@ The bot displays statistics every 10 iterations:
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/capi/v2/market/candles` | GET | Get K-lines data |
-| `/capi/v2/account/set-leverage` | POST | Set leverage |
-| `/capi/v2/account/all-position` | GET | Check positions |
+| `/capi/v2/account/setLeverage` | POST | Set leverage |
+| `/capi/v2/account/position/allPosition` | GET | Check positions |
 | `/capi/v2/order/placeOrder` | POST | Place orders |
 
-**Note:** All WEEX v2 API endpoints use `/capi/v2/` prefix with hyphenated paths (e.g., `set-leverage`, `all-position`).
+**Note:** WEEX v2 API endpoints use `/capi/v2/` prefix. Position and leverage endpoints use CamelCase (e.g., `setLeverage`, `allPosition`).
 
 ## Error Handling
 

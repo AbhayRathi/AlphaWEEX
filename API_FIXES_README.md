@@ -5,50 +5,49 @@ This document describes the API endpoint fixes applied to resolve 404/400 errors
 ## Leverage Endpoint
 
 ### Fixed Implementation (Latest - AI Wars Competition)
-- **Correct Path:** `/capi/v2/account/set-leverage`
+- **Correct Path:** `/capi/v2/account/setLeverage`
 - **Method:** POST
 - **Body:** 
   ```json
   {
     "symbol": "cmt_btcusdt",
     "leverage": 20,
-    "marginMode": 1
+    "marginMode": 2
   }
   ```
 - **Note:** 
-  - `marginMode` must be an **integer**: 1 for Isolated, 2 for Cross
+  - `marginMode` must be an **integer**: **2** (Cross mode required by API)
   - `leverage` must be an **integer**, not a string
   - "Already set" responses are treated as success
 
 ### Previous Implementation (Incorrect)
 - **Path:** `/capi/v2/account/leverage` ❌ (original incorrect path)
-- **Path (Old Fix):** `/capi/v2/account/setLeverage` ❌ (CamelCase - intermediate fix attempt)
-- **Path (Old Fix 2):** `/api/v2/account/set-leverage` ❌ (wrong prefix - intermediate fix attempt)
+- **Path (Old Fix):** `/capi/v2/account/set-leverage` ❌ (hyphenated - intermediate fix attempt)
+- **Path (Old Fix 2):** `/api/v2/account/setLeverage` ❌ (wrong prefix - intermediate fix attempt)
 - **Body:** `{"symbol": "cmt_btcusdt", "marginMode": "isolated", "leverage": "10"}` ❌ (string types)
 
 ### Why This Fix Was Needed
 The WEEX API v2 for AI Wars Competition requires:
-1. The correct endpoint path `/capi/v2/account/set-leverage` (hyphenated, lowercase, with /capi/ prefix)
-2. A `marginMode` field as an **integer** (1 = Isolated, 2 = Cross)
+1. The correct endpoint path `/capi/v2/account/setLeverage` (CamelCase, with /capi/ prefix)
+2. A `marginMode` field as an **integer**: **2** (Cross mode required)
 3. The `leverage` value as an **integer**, not a string
 4. Graceful handling when leverage is already set (not an error condition)
 
 ## Positions Endpoint
 
 ### Fixed Implementation (Latest - AI Wars Competition)
-- **Correct Path:** `/capi/v2/account/all-position`
-- **Fallback Path:** `/capi/v2/account/position/all-position` (if primary returns 404)
+- **Correct Path:** `/capi/v2/account/position/allPosition`
 - **Method:** GET
 - **Query Parameters:** `?symbol={symbol}` (optional)
-- **Note:** Returns all positions for the account
+- **Note:** Returns all positions for the account, path must be in /position/ subfolder with CamelCase allPosition
 
 ### Previous Implementation (Incorrect)
 - **Path:** `/capi/v2/account/positions` ❌ (returns 404 error)
-- **Path (Old Fix):** `/capi/v2/account/allPosition` ❌ (CamelCase)
-- **Path (Old Fix 2):** `/api/v2/account/all-position` ❌ (wrong prefix)
+- **Path (Old Fix):** `/capi/v2/account/all-position` ❌ (hyphenated)
+- **Path (Old Fix 2):** `/api/v2/account/position/all-position` ❌ (wrong prefix)
 
 ### Why This Fix Was Needed
-The WEEX API v2 for AI Wars Competition changed the positions endpoint path. Using hyphenated lowercase paths (`/capi/v2/account/all-position`) instead of CamelCase paths. A fallback endpoint is also provided in case the primary endpoint returns a 404.
+The WEEX API v2 for AI Wars Competition changed the positions endpoint path. Using CamelCase path (`/capi/v2/account/position/allPosition`) in the /position/ subfolder.
 
 ## Candles Endpoint
 
@@ -78,10 +77,9 @@ The following time intervals are supported:
 
 All changes have been tested with comprehensive unit tests in `tests/test_competition_bot.py`:
 
-1. **test_set_leverage_endpoint** - Verifies correct path (`/capi/v2/account/set-leverage`) and body format (integer marginMode and leverage)
+1. **test_set_leverage_endpoint** - Verifies correct path (`/capi/v2/account/setLeverage`) and body format (integer marginMode=2 and leverage)
 2. **test_set_leverage_already_set_handling** - Verifies "already set" is handled as success
-3. **test_margin_mode_isolated** - Verifies marginMode is integer 1 for isolated mode
-4. **test_get_klines_granularity_parameter** - Verifies granularity parameter is used
+3. **test_get_klines_granularity_parameter** - Verifies granularity parameter is used
 
 Run tests with:
 ```bash
@@ -96,9 +94,9 @@ python3 validate_api_fixes.py
 ## Impact
 
 These fixes resolve:
-- ✅ 404 errors when setting leverage (updated to correct endpoint path `/capi/v2/account/set-leverage` with hyphens and correct prefix)
-- ✅ 400 errors when setting leverage (marginMode as integer, leverage as integer)
-- ✅ 404 errors when fetching positions (updated to `/capi/v2/account/all-position` with hyphens and fallback support)
+- ✅ 404 errors when setting leverage (updated to correct endpoint path `/capi/v2/account/setLeverage` with CamelCase)
+- ✅ 400 errors when setting leverage (marginMode as integer 2, leverage as integer)
+- ✅ 404 errors when fetching positions (updated to `/capi/v2/account/position/allPosition` with CamelCase in /position/ subfolder)
 - ✅ 400 errors when fetching candle data (wrong parameter name)
 - ✅ False error reports when leverage is already set correctly
 - ✅ Added request URL logging for debugging
