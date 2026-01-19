@@ -120,54 +120,54 @@ class WEEXv2Client:
             hashlib.sha256
         ).digest()
         return base64.b64encode(signature).decode()
-    
+        
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
-                          body: Optional[Dict] = None) -> requests.Response:
-        """
-        Send authenticated request to WEEX API
-        """
-        # Check for 521 cooldown
-        if time.time() - self.last_521_error_time < self.cooldown_seconds:
-            remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
-            logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
-            raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
-        
-        timestamp = str(int(time.time() * 1000))
-        body_str = json.dumps(body) if body else ""
-        signature = self.generate_signature(timestamp, method, path, query_params, body_str)
-        
-        headers = {
-            "ACCESS-KEY": self.api_key,
-            "ACCESS-SIGN": signature,
-            "ACCESS-TIMESTAMP": timestamp,
-            "ACCESS-PASSPHRASE": self.api_password,
-            "Content-Type": "application/json",
-            "locale": "en-US"
-        }
-        
-        url = f"{self.BASE_URL}{path}{query_params}"
-        # logger.info(f"🚀 Attempting request to: {url}")
-        
-        try:
-            if method.upper() == "GET":
-                response = self.session.get(url, headers=headers, timeout=10)
-            else:
-                response = self.session.post(url, headers=headers, data=body_str, timeout=10)
+                              body: Optional[Dict] = None) -> requests.Response:
+            """
+            Send authenticated request to WEEX API
+            """
+            # Check for 521 cooldown
+            if time.time() - self.last_521_error_time < self.cooldown_seconds:
+                remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
+                logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
+                raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
             
-            # Check for 521 error (Firewall block)
-            if response.status_code == 521:
-                logger.error("🔥 521 Error: Firewall block detected! Starting 60s cooldown...")
-                self.last_521_error_time = time.time()
-                raise Exception("521 Firewall Error - Cooldown initiated")
+            timestamp = str(int(time.time() * 1000))
+            body_str = json.dumps(body) if body else ""
+            signature = self.generate_signature(timestamp, method, path, query_params, body_str)
             
-            return response
+            headers = {
+                "ACCESS-KEY": self.api_key,
+                "ACCESS-SIGN": signature,
+                "ACCESS-TIMESTAMP": timestamp,
+                "ACCESS-PASSPHRASE": self.api_password,
+                "Content-Type": "application/json",
+                "locale": "en-US"
+            }
             
-        except requests.exceptions.Timeout:
-            logger.error("⏱️ Request timeout")
-            raise
-        except Exception as e:
-            logger.error(f"❌ Request failed: {str(e)}")
-            raise
+            url = f"{self.BASE_URL}{path}{query_params}"
+            
+            try:
+                # FIX: Increased timeout to 30s to prevent premature cutoffs
+                if method.upper() == "GET":
+                    response = self.session.get(url, headers=headers, timeout=30)
+                else:
+                    response = self.session.post(url, headers=headers, data=body_str, timeout=30)
+                
+                # Check for 521 error (Firewall block)
+                if response.status_code == 521:
+                    logger.error("🔥 521 Error: Firewall block detected! Starting 60s cooldown...")
+                    self.last_521_error_time = time.time()
+                    raise Exception("521 Firewall Error - Cooldown initiated")
+                
+                return response
+                
+            except requests.exceptions.Timeout:
+                logger.error(f"⏱️ Request timeout for {path}")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Request failed: {str(e)}")
+                raise
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
@@ -429,37 +429,44 @@ class WEEXv2Client:
             return None
     
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
-        symbol = symbol.replace('cmt_', '').upper()
-        
-        try:
-            path = "/capi/v2/account/position/setLeverage"
-            # WEEX V2 requires leverage as INT and marginMode as 2 (Cross)
-            body = {
-                "symbol": symbol,
-                "leverage": int(leverage),
-                "marginMode": 2 
-            }
+            # FIX: Do NOT strip 'cmt_' and do NOT uppercase. Weex V2 API expects 'cmt_btcusdt'
+            # We ensure it is lowercase just in case.
+            symbol = symbol.lower()
+            if "cmt_" not in symbol:
+                 # Add prefix if missing, though typically the bot passes it correctly
+                 symbol = f"cmt_{symbol}"
             
-            response = self.send_weex_request("POST", path, body=body)
-            
-            if response.status_code == 200:
-                data = response.json()
-                # code 0 or success=True are both valid "OK" signals
-                if data.get('code') == 0 or data.get('code') == '00000' or data.get('success'):
-                    logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
-                    return True
+            try:
+                path = "/capi/v2/account/position/setLeverage"
                 
-                # Handle "no change" error as a success
-                msg = str(data.get('message', '')).lower()
-                if "already set" in msg or "no change" in msg:
-                    return True
+                body = {
+                    "symbol": symbol,
+                    "leverage": int(leverage),
+                    "marginMode": 2 
+                }
+                
+                response = self.send_weex_request("POST", path, body=body)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('code') == '00000' or data.get('success') is True:
+                        logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
+                        return True
                     
-                logger.error(f"❌ Leverage API Error: {data.get('message')}")
+                    # Handle "no change" error as a success
+                    msg = str(data.get('msg', '')).lower()
+                    if "already" in msg or "no change" in msg:
+                        return True
+                        
+                    logger.error(f"❌ Leverage API Error for {symbol}: {data}")
+                    return False
+                
+                logger.error(f"❌ Leverage Status Code {response.status_code}: {response.text}")
                 return False
-            return False
-        except Exception as e:
-            logger.error(f"❌ Leverage Exception: {str(e)}")
-            return False
+                
+            except Exception as e:
+                logger.error(f"❌ Leverage Exception: {str(e)}")
+                return False
     
     def has_open_position(self, symbol: str) -> bool:
         # 1. Clean symbol first
