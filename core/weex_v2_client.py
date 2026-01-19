@@ -66,7 +66,8 @@ class WEEXv2Client:
         # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
         self.session = requests.Session()
         
-        # Precision settings for different symbols
+        # Precision settings for different symbols (lowercase keys)
+        # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
         self.precision_map = {
             "cmt_btcusdt": 4,   # BTC: 4 decimals
             "cmt_ethusdt": 3,   # ETH: 3 decimals
@@ -83,16 +84,24 @@ class WEEXv2Client:
         Round quantity to the correct precision for the symbol
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (lowercase for precision map lookup)
             qty: Quantity to round
             
         Returns:
             Rounded quantity
+            
+        Note:
+            This method expects lowercase symbols to match precision_map keys.
+            Symbol uppercase conversion happens separately for API calls.
         """
-        precision = self.precision_map.get(symbol)
-        if precision is None:
-            logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+        if not symbol:
+            logger.warning(f"⚠️ Invalid symbol: {symbol}, using default 2 decimals")
             precision = 2
+        else:
+            precision = self.precision_map.get(symbol.lower())
+            if precision is None:
+                logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
+                precision = 2
         return round(qty, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
@@ -193,11 +202,11 @@ class WEEXv2Client:
                 import urllib.parse
                 path = "/capi/v2/market/candles"
                 
-                # Use the symbol as-is (do not transform for market data endpoints)
-                # The cmt_ prefix should be preserved for competition trading symbols
-                logger.debug(f"Requesting klines for symbol: {symbol}")
+                # Ensure symbol is uppercase for API call
+                symbol_upper = symbol.upper()
+                logger.debug(f"Requesting klines for symbol: {symbol_upper}")
                 
-                query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+                query_params = f"?symbol={urllib.parse.quote(symbol_upper)}&granularity={interval}&limit={limit}"
                 
                 response = self.send_weex_request("GET", path, query_params)
                 
@@ -234,12 +243,13 @@ class WEEXv2Client:
             Funding rate as percentage (e.g., 0.01 for 0.01%), or 0.0001 (0.01%) as fallback if failed
         """
         try:
-            # Use the symbol as-is (do not transform for market data endpoints)
-            logger.debug(f"Fetching funding rate for symbol: {symbol}")
+            # Ensure symbol is uppercase for API call
+            symbol_upper = symbol.upper()
+            logger.debug(f"Fetching funding rate for symbol: {symbol_upper}")
             
             # Updated path to correct WEEX V2 endpoint (removed 'public')
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -286,11 +296,12 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Use the symbol as-is (do not transform for market data endpoints)
-            logger.debug(f"Fetching order book for symbol: {symbol}")
+            # Ensure symbol is uppercase for API call
+            symbol_upper = symbol.upper()
+            logger.debug(f"Fetching order book for symbol: {symbol_upper}")
             
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -324,11 +335,12 @@ class WEEXv2Client:
         """
         try:
             import urllib.parse
-            # Use the symbol as-is (do not transform for market data endpoints)
-            logger.debug(f"Fetching ticker for symbol: {symbol}")
+            # Ensure symbol is uppercase for API call
+            symbol_upper = symbol.upper()
+            logger.debug(f"Fetching ticker for symbol: {symbol_upper}")
             
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(symbol_upper)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -454,6 +466,8 @@ class WEEXv2Client:
             The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
         try:
+            # Ensure symbol is uppercase for API call
+            symbol = symbol.upper()
             path = "/capi/v2/account/set-leverage"
             # Always use marginMode 2 (Cross) as per requirements
             # Payload fields ordered as per WEEX API requirements: symbol, leverage, marginMode
@@ -504,6 +518,8 @@ class WEEXv2Client:
             True if position exists, False otherwise
         """
         try:
+            # Ensure symbol is uppercase for API call (handle None/empty gracefully)
+            symbol = symbol.upper() if symbol else None
             path = "/capi/v2/account/position/allPosition"
             query_params = f"?symbol={symbol}" if symbol else ""
             logger.debug(f"Position check path: {path}")
@@ -511,15 +527,9 @@ class WEEXv2Client:
             response = self.send_weex_request("GET", path, query_params)
             
             if response.status_code == 200:
-                data = response.json()
-                # Handle both list responses and dict responses
-                if isinstance(data, list):
-                    positions = data
-                elif data.get('code') == 0 or data.get('success'):
-                    positions = data.get('data', [])
-                else:
-                    logger.error(f"❌ Get positions error: {data.get('message', 'Unknown error')}")
-                    return False
+                response_data = response.json()
+                # If the API returns a list directly, use it. If it's a dict, get 'data'.
+                positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
                 
                 # Check if any position has non-zero size
                 for pos in positions:
@@ -562,17 +572,20 @@ class WEEXv2Client:
             Order response dict or None if failed
         """
         try:
-            # Spread guard
+            # Spread guard (symbol will be converted to uppercase inside check_spread -> get_order_book)
             if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
                 logger.warning(f"🛑 Order rejected for {symbol} due to wide spread")
                 return None
             
-            # Round quantity to correct precision
+            # Round quantity to correct precision (uses lowercase symbol for precision map lookup)
             size = self.round_qty(symbol, size)
+            
+            # Ensure symbol is uppercase for API call
+            symbol_upper = symbol.upper()
             
             path = "/capi/v2/order/placeOrder"
             body = {
-                "symbol": symbol,
+                "symbol": symbol_upper,
                 "side": side.upper(),
                 "type": "MARKET",
                 "size": str(size)
