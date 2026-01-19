@@ -79,20 +79,21 @@ class WEEXv2Client:
             "cmt_ltcusdt": 2,   # LTC: 2 decimals
         }
     
-    def clean_symbol(self, symbol: str) -> str:
+    def clean_symbol(self, symbol: Optional[str]) -> str:
         """
         Clean symbol for API calls: remove 'cmt_' prefix and convert to UPPERCASE
         
         Args:
-            symbol: Trading symbol (may have 'cmt_' prefix, any case)
+            symbol: Trading symbol (may have 'cmt_' prefix, any case, or None)
             
         Returns:
-            Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT')
+            Cleaned symbol for API (e.g., 'cmt_btcusdt' -> 'BTCUSDT'), empty string if None
             
         Example:
             clean_symbol('cmt_btcusdt') -> 'BTCUSDT'
             clean_symbol('cmt_ETHUSDT') -> 'ETHUSDT'
             clean_symbol('SOLUSDT') -> 'SOLUSDT'
+            clean_symbol(None) -> ''
         """
         if not symbol:
             return ""
@@ -551,12 +552,13 @@ class WEEXv2Client:
                 positions = response_data if isinstance(response_data, list) else response_data.get('data', [])
                 
                 # Check if any position has non-zero size
+                # Note: API returns cleaned symbols (e.g., "BTCUSDT"), so we compare with symbol_clean
                 for pos in positions:
                     try:
                         size = float(pos.get('size', 0))
                         if pos.get('symbol') == symbol_clean and size > 0:
-                            logger.info(f"📊 Open position found for {symbol}: {pos.get('size')} @ {pos.get('entryPrice')}")
-                            # Store position for TP/SL tracking
+                            logger.info(f"📊 Open position found for {symbol_clean}: {pos.get('size')} @ {pos.get('entryPrice')}")
+                            # Store position using original symbol for internal tracking consistency
                             self.open_positions[symbol] = pos
                             return True
                     except (ValueError, TypeError):
