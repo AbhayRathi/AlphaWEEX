@@ -354,6 +354,7 @@ class WEEXv2Client:
             return None
     
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
+        symbol = symbol.replace('cmt_', '').upper()
         """
         Get ticker (24h stats) from WEEX
         Endpoint: GET /capi/v2/market/ticker
@@ -364,7 +365,6 @@ class WEEXv2Client:
         Returns:
             Dictionary with ticker data (last price, 24h volume, etc.), or None if failed
         """
-        symbol = symbol.replace('cmt_', '').upper()
         try:
             import urllib.parse
             logger.debug(f"Fetching ticker for symbol: {symbol}")
@@ -480,6 +480,7 @@ class WEEXv2Client:
                 return None
     
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
+        symbol = symbol.replace('cmt_', '').upper()
         """
         Set leverage for a symbol (Force 20x on startup as per requirements)
         Endpoint: POST /capi/v2/account/position/setLeverage
@@ -495,7 +496,7 @@ class WEEXv2Client:
         Note:
             The margin_mode parameter is ignored. The API always uses Cross mode (marginMode=2).
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        
         try:
             path = "/capi/v2/account/position/setLeverage"
             # Always use marginMode 2 (Cross) as per requirements
@@ -536,6 +537,7 @@ class WEEXv2Client:
             return False
     
     def has_open_position(self, symbol: str) -> bool:
+        symbol = symbol.replace('cmt_', '').upper()
         """
         Check if there's an open position for a symbol
         Endpoint: GET /capi/v2/account/position/allPosition
@@ -546,7 +548,7 @@ class WEEXv2Client:
         Returns:
             True if position exists, False otherwise
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        
         try:
             path = "/capi/v2/account/position/allPosition"
             query_params = f"?symbol={symbol}" if symbol else ""
@@ -587,6 +589,7 @@ class WEEXv2Client:
     
     def place_market_order(self, symbol: str, side: str, size: float,
                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
+        symbol = symbol.replace('cmt_', '').upper()
         """
         Place a market order with precision rounding and spread check
         Endpoint: POST /capi/v2/order/placeOrder
@@ -600,7 +603,7 @@ class WEEXv2Client:
         Returns:
             Order response dict or None if failed
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        
         try:
             # Spread guard (symbol is already cleaned/uppercase at this point)
             if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
