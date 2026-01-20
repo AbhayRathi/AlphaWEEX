@@ -502,7 +502,7 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
                 ],
                 temperature=0.7,
                 max_tokens=500,
-                timeout=60.0,  # Increased timeout to 60 seconds for DeepSeek reasoner
+                timeout=120.0,  # Increased timeout to 60 seconds for DeepSeek reasoner
                 stream=False  # Explicitly disable streaming
             )
             
