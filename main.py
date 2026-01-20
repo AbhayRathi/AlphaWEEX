@@ -300,12 +300,12 @@ class AetherEvo:
                 # Execute trades based on signal
                 if signal['action'] in ['BUY', 'SELL']:
                     if self.discovery.weex:
+                        # Clean the symbol: remove 'cmt_' prefix and '/' separator, convert to uppercase
+                        clean_symbol = self.symbol.replace('/', '').replace('cmt_', '').upper()
+                        
                         try:
                             # Get trade size from config
                             trade_size = self.config.trading.trade_size
-                            
-                            # Clean the symbol: remove 'cmt_' prefix and '/' separator, convert to uppercase
-                            clean_symbol = self.symbol.replace('/', '').replace('cmt_', '').upper()
                             
                             logger.info(f"🚀 Executing {signal['action']} order for {clean_symbol} (size: {trade_size})")
                             
