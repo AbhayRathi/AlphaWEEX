@@ -12,6 +12,7 @@ import requests
 import json
 import logging
 import urllib.parse
+import uuid
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -545,7 +546,6 @@ class WEEXv2Client:
     
     def place_market_order(self, symbol: str, side: str, size: float,
                                check_spread: bool = True) -> Optional[Dict[str, Any]]:
-            import uuid # Ensure uuid is available
             symbol = symbol.replace('cmt_', '').upper()
             
             try:
