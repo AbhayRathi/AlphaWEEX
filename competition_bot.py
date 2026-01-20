@@ -810,7 +810,8 @@ class CompetitionTradingBot:
                     position = self.client.open_positions.get(symbol, {})
                     entry_price = float(position.get('entryPrice', 0))
                     position_side = position.get('side', '').upper()
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                    side_mult = 1 if position_side == "LONG" else -1
+                    pnl_pct = side_mult * ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
                     
                     # Handle Alpha-Apex partial profit taking
                     if trigger == "PARTIAL_1":
@@ -842,7 +843,7 @@ class CompetitionTradingBot:
                             self.trade_journal.append_trade(
                                 symbol=symbol,
                                 direction=position_side,
-                                profit_loss=pnl_pct * 0.5,  # 50% of position
+                                profit_loss=pnl_pct,  # 50% of position
                                 ai_reason=ai_reason,
                                 entry_price=entry_price,
                                 exit_price=current_price,
@@ -1199,7 +1200,8 @@ class CompetitionTradingBot:
                     
                     position = self.client.open_positions.get(symbol, {})
                     entry_price = float(position.get('entryPrice', current_price))
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
+                    side_mult = 1 if position.get('side', '').upper() == "LONG" else -1
+                    pnl_pct = side_mult * ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0.0
                     
                     self.db.record_trade_exit(symbol, current_price, pnl_pct)
                     self.position_open_times.pop(symbol, None)
