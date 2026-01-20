@@ -699,7 +699,7 @@ class WEEXv2Client:
         
         position = self.open_positions[symbol]
         size = abs(float(position.get('size', 0)))
-        side = "SELL" if position.get('side') == "LONG" else "BUY"
+        side = "CLOSE_LONG" if position.get('side', '').upper() == "LONG" else "CLOSE_SHORT"
         
         result = self.place_market_order(symbol, side, size)
         
