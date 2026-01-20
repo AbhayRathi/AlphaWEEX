@@ -431,7 +431,7 @@ class CompetitionTradingBot:
         for order_id in stale_orders:
             del self.pending_orders[order_id]
     
-    def is_volume_spike(self, klines: List[List], threshold: float = 1.5) -> bool:
+    def is_volume_spike(self, klines: List[List], threshold: float = 0.88) -> bool:
         """
         Enhancement 6: Check if recent volume is above average (prevents low-liquidity traps)
         
