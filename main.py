@@ -201,7 +201,7 @@ class AetherEvo:
         while self.running:
             try:
                 # Wait for reasoning to produce analysis
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(90)  # Check every minute
                 
                 # Get latest analysis
                 analysis = self.reasoning.get_latest_analysis()
@@ -242,7 +242,7 @@ class AetherEvo:
                 
             except Exception as e:
                 logger.error(f"Error in evolution check: {str(e)}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(90)
     
     async def trading_loop(self):
         """Main trading execution loop"""
@@ -253,13 +253,13 @@ class AetherEvo:
                 # Check kill-switch
                 if self.guardrails.is_kill_switch_active():
                     logger.critical("🛑 Kill-switch is active! Trading halted.")
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(90)
                     continue
                 
                 # Get latest analysis
                 analysis = self.reasoning.get_latest_analysis()
                 if not analysis:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(60)
                     continue
                 
                 # Phase 3: Log reasoning trace
