@@ -730,7 +730,7 @@ class WEEXv2Client:
         close_size = self.round_qty(symbol, close_size)
         
         # Determine side (opposite of position)
-        side = "SELL" if position.get('side') == "LONG" else "BUY"
+        side = "CLOSE_LONG" if position.get('side', '').upper() == "LONG" else "CLOSE_SHORT"
         
         logger.info(f"✂️ Closing {percentage}% of {symbol} ({close_size} units)")
         
