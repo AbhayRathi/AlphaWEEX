@@ -306,17 +306,15 @@ class AetherEvo:
                             # Get trade size from config
                             trade_size = self.config.trading.trade_size
                             
-                            # Convert symbol from BTC/USDT to BTCUSDT format
-                            # Handle various symbol formats safely
-                            if '/' in self.symbol:
-                                trading_symbol = self.symbol.replace('/', '')
+                            # Clean the symbol: remove 'cmt_' prefix and '/' separator, convert to uppercase
+                            clean_symbol = self.symbol.replace('/', '').replace('cmt_', '').upper()
                             
-                            logger.info(f"🚀 Executing {signal['action']} order for {trading_symbol} (size: {trade_size})")
+                            logger.info(f"🚀 Executing {signal['action']} order for {clean_symbol} (size: {trade_size})")
                             
                             # Place market order
                             order_result = await asyncio.to_thread(
                                 self.discovery.weex.place_market_order,
-                                trading_symbol,
+                                clean_symbol,
                                 signal['action'],
                                 trade_size
                             )
@@ -326,13 +324,13 @@ class AetherEvo:
                             else:
                                 # Provide more specific error information
                                 logger.error(
-                                    f"❌ Order execution failed for {trading_symbol} {signal['action']}. "
+                                    f"❌ Order execution failed for {clean_symbol} {signal['action']}. "
                                     f"Possible causes: insufficient balance, wide spread, invalid symbol, or API error. "
                                     f"Check WEEX v2 client logs for details."
                                 )
                                 
                         except Exception as e:
-                            logger.error(f"❌ Error executing trade for {trading_symbol} {signal['action']}: {str(e)}")
+                            logger.error(f"❌ Error executing trade for {clean_symbol} {signal['action']}: {str(e)}")
                     else:
                         logger.warning("⚠️ WEEX client not initialized - skipping trade execution")
                 
