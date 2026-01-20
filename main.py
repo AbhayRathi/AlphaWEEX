@@ -305,7 +305,11 @@ class AetherEvo:
                             trade_size = self.config.trading.trade_size
                             
                             # Convert symbol from BTC/USDT to BTCUSDT format
-                            trading_symbol = self.symbol.replace('/', '')
+                            # Handle various symbol formats safely
+                            if '/' in self.symbol:
+                                trading_symbol = self.symbol.replace('/', '')
+                            else:
+                                trading_symbol = self.symbol
                             
                             logger.info(f"🚀 Executing {signal['action']} order for {trading_symbol} (size: {trade_size})")
                             
@@ -320,10 +324,15 @@ class AetherEvo:
                             if order_result:
                                 logger.info(f"✅ Order executed successfully: {order_result}")
                             else:
-                                logger.error(f"❌ Order execution failed for {trading_symbol}")
+                                # Provide more specific error information
+                                logger.error(
+                                    f"❌ Order execution failed for {trading_symbol} {signal['action']}. "
+                                    f"Possible causes: insufficient balance, wide spread, invalid symbol, or API error. "
+                                    f"Check WEEX v2 client logs for details."
+                                )
                                 
                         except Exception as e:
-                            logger.error(f"❌ Error executing trade: {str(e)}")
+                            logger.error(f"❌ Error executing trade for {trading_symbol} {signal['action']}: {str(e)}")
                     else:
                         logger.warning("⚠️ WEEX client not initialized - skipping trade execution")
                 
