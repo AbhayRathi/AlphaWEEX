@@ -300,6 +300,8 @@ class AetherEvo:
                 # Execute trades based on signal
                 if signal['action'] in ['BUY', 'SELL']:
                     if self.discovery.weex:
+                        # Initialize trading_symbol in outer scope to avoid NameError in exception handler
+                        trading_symbol = self.symbol
                         try:
                             # Get trade size from config
                             trade_size = self.config.trading.trade_size
@@ -308,8 +310,6 @@ class AetherEvo:
                             # Handle various symbol formats safely
                             if '/' in self.symbol:
                                 trading_symbol = self.symbol.replace('/', '')
-                            else:
-                                trading_symbol = self.symbol
                             
                             logger.info(f"🚀 Executing {signal['action']} order for {trading_symbol} (size: {trade_size})")
                             
