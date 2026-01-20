@@ -592,6 +592,10 @@ class WEEXv2Client:
                     logger.info(f"✅ Success! ID: {data.get('order_id')}")
                     return data
             return None
+
+        except Exception as e:
+            logger.error(f"❌ Failed to place order for {symbol}: {str(e)}")
+            return None
     
     def check_tp_sl_triggers(self, symbol: str, current_price: float) -> Optional[str]:
         """
