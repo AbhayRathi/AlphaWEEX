@@ -77,13 +77,13 @@ EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
-MAIN_LOOP_INTERVAL = 30  # Check every 10 seconds (Alpha-Apex aggressive mode)
+MAIN_LOOP_INTERVAL = 15  # Check every 10 seconds (Alpha-Apex aggressive mode)
 MIN_CONFIDENCE = 0.64  # Alpha-Apex: Minimum confidence threshold
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
-VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
-VOLATILITY_BYPASS_CONFIDENCE = 0.60  # Alpha-Apex: Lower confidence threshold during high volatility
+VOLATILITY_BYPASS_THRESHOLD = 0.33  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
+VOLATILITY_BYPASS_CONFIDENCE = 0.51  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
-AUTO_FLIP_COOLDOWN_SECONDS = 60  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
+AUTO_FLIP_COOLDOWN_SECONDS = 30  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
 
 # Bi-Directional Trading Enhancements
 SHORT_POSITION_SIZE_REDUCTION = 0.80  # 20% smaller position size for shorts (unlimited risk)
