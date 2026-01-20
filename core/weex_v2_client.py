@@ -124,52 +124,59 @@ class WEEXv2Client:
         return base64.b64encode(signature).decode()
         
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
-                              body: Optional[Dict] = None) -> requests.Response:
-            """
-            Send authenticated request to WEEX API
-            """
-            # Check for 521 cooldown
-            if time.time() - self.last_521_error_time < self.cooldown_seconds:
-                remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
-                logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
-                raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
+                            body: Union[Dict, str, None] = None) -> requests.Response:
+        """
+        Send authenticated request to WEEX API using compact JSON for signatures.
+        """
+        # 1. Cooldown check
+        if time.time() - self.last_521_error_time < self.cooldown_seconds:
+            remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
+            logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
+            raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
+    
+        timestamp = str(int(time.time() * 1000))
+    
+        # 2. CRITICAL: Handle body stringification once and keep it compact
+        if body:
+            if isinstance(body, dict):
+                # Use separators to ensure NO whitespace (e.g., {"a":"b"} not {"a": "b"})
+                body_str = json.dumps(body, separators=(',', ':'))
+            else:
+                body_str = body
+        else:
+            body_str = ""
+    
+        # 3. Generate signature using the same body_str that will be sent
+        signature = self.generate_signature(timestamp, method, path, query_params, body_str)
+        
+        headers = {
+            "ACCESS-KEY": self.api_key,
+            "ACCESS-SIGN": signature,
+            "ACCESS-PASSPHRASE": self.api_password,
+            "ACCESS-TIMESTAMP": timestamp,
+            "Content-Type": "application/json",
+            "locale": "en-US"
+        }
+        
+        url = f"{self.BASE_URL}{path}{query_params}"
+        
+        try:
+            if method.upper() == "GET":
+                response = self.session.get(url, headers=headers, timeout=30)
+            else:
+                # Send the EXACT body_str used for the signature
+                response = self.session.post(url, headers=headers, data=body_str, timeout=30)
             
-            timestamp = str(int(time.time() * 1000))
-            body_str = json.dumps(body) if body else ""
-            signature = self.generate_signature(timestamp, method, path, query_params, body_str)
-            
-            headers = {
-                "ACCESS-KEY": self.api_key,
-                "ACCESS-SIGN": signature,
-                "ACCESS-TIMESTAMP": timestamp,
-                "ACCESS-PASSPHRASE": self.api_password,
-                "Content-Type": "application/json",
-                "locale": "en-US"
-            }
-            
-            url = f"{self.BASE_URL}{path}{query_params}"
-            
-            try:
-                # FIX: Increased timeout to 30s to prevent premature cutoffs
-                if method.upper() == "GET":
-                    response = self.session.get(url, headers=headers, timeout=30)
-                else:
-                    response = self.session.post(url, headers=headers, data=body_str, timeout=30)
+            if response.status_code == 521:
+                logger.error("🔥 521 Error: Firewall block! Starting 60s cooldown...")
+                self.last_521_error_time = time.time()
+                raise Exception("521 Firewall Error - Cooldown initiated")
                 
-                # Check for 521 error (Firewall block)
-                if response.status_code == 521:
-                    logger.error("🔥 521 Error: Firewall block detected! Starting 60s cooldown...")
-                    self.last_521_error_time = time.time()
-                    raise Exception("521 Firewall Error - Cooldown initiated")
-                
-                return response
-                
-            except requests.exceptions.Timeout:
-                logger.error(f"⏱️ Request timeout for {path}")
-                raise
-            except Exception as e:
-                logger.error(f"❌ Request failed: {str(e)}")
-                raise
+            return response
+            
+        except Exception as e:
+            logger.error(f"❌ Request failed: {str(e)}")
+            raise
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
