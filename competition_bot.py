@@ -944,6 +944,8 @@ class CompetitionTradingBot:
                         
                         # Close position
                         success = self.client.close_position(symbol)
+                        self.short_entry_times.pop(symbol, None)
+                        self.position_open_times.pop(symbol, None)
                         
                         if success:
                             # NEW: Clean up short entry time tracking
