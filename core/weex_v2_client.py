@@ -546,7 +546,8 @@ class WEEXv2Client:
     
     def place_market_order(self, symbol: str, side: str, size: float,
                                check_spread: bool = True) -> Optional[Dict[str, Any]]:
-            symbol = symbol.replace('cmt_', '').upper()
+            #symbol = symbol.replace('cmt_', '').upper()
+            symbol = symbol.lower()
             
             try:
                 # 1. Spread guard
