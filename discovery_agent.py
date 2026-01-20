@@ -8,6 +8,7 @@ import time
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import logging
+from core.weex_v2_client import WEEXv2Client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,6 +49,14 @@ class DiscoveryAgent:
             self.exchange = ccxt.binanceus({'enableRateLimit': True})
 
         self.capabilities: Dict[str, Any] = {}
+        
+        # Initialize WEEX v2 client for direct trading
+        if api_key and api_secret and api_password:
+            self.weex = WEEXv2Client(api_key, api_secret, api_password)
+            logger.info("✅ WEEX v2 client initialized for trading")
+        else:
+            self.weex = None
+            logger.warning("⚠️ WEEX v2 client not initialized (missing credentials)")
 
     async def discover_capabilities(self) -> Dict[str, Any]:
         """

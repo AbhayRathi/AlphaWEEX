@@ -297,8 +297,44 @@ class AetherEvo:
                     except Exception as e:
                         logger.error(f"Shadow engine error (non-critical): {e}")
                 
-                # In production, execute trades here based on signal
-                # For now, just log the signal
+                # Execute trades based on signal
+                if signal['action'] in ['BUY', 'SELL']:
+                    if self.discovery.weex:
+                        # Initialize trading_symbol in outer scope to avoid NameError in exception handler
+                        trading_symbol = self.symbol
+                        try:
+                            # Get trade size from config
+                            trade_size = self.config.trading.trade_size
+                            
+                            # Convert symbol from BTC/USDT to BTCUSDT format
+                            # Handle various symbol formats safely
+                            if '/' in self.symbol:
+                                trading_symbol = self.symbol.replace('/', '')
+                            
+                            logger.info(f"🚀 Executing {signal['action']} order for {trading_symbol} (size: {trade_size})")
+                            
+                            # Place market order
+                            order_result = await asyncio.to_thread(
+                                self.discovery.weex.place_market_order,
+                                trading_symbol,
+                                signal['action'],
+                                trade_size
+                            )
+                            
+                            if order_result:
+                                logger.info(f"✅ Order executed successfully: {order_result}")
+                            else:
+                                # Provide more specific error information
+                                logger.error(
+                                    f"❌ Order execution failed for {trading_symbol} {signal['action']}. "
+                                    f"Possible causes: insufficient balance, wide spread, invalid symbol, or API error. "
+                                    f"Check WEEX v2 client logs for details."
+                                )
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Error executing trade for {trading_symbol} {signal['action']}: {str(e)}")
+                    else:
+                        logger.warning("⚠️ WEEX client not initialized - skipping trade execution")
                 
                 # Simulate equity update (in production, fetch real balance)
                 # For demo, just use a placeholder

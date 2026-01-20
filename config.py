@@ -29,6 +29,7 @@ class TradingConfig(BaseModel):
     kill_switch_threshold: float = Field(default_factory=lambda: float(os.getenv("KILL_SWITCH_THRESHOLD", "0.03")))
     stability_lock_hours: int = Field(default_factory=lambda: int(os.getenv("STABILITY_LOCK_HOURS", "12")))
     reasoning_interval_minutes: int = Field(default_factory=lambda: int(os.getenv("REASONING_INTERVAL_MINUTES", "15")))
+    trade_size: float = Field(default_factory=lambda: float(os.getenv("TRADE_SIZE", "0.001")))
 
 
 class AetherConfig(BaseModel):
