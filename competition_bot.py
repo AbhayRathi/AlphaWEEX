@@ -81,7 +81,7 @@ MAIN_LOOP_INTERVAL = 30  # Check every 10 seconds (Alpha-Apex aggressive mode)
 MIN_CONFIDENCE = 0.64  # Alpha-Apex: Minimum confidence threshold
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.5  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
-VOLATILITY_BYPASS_CONFIDENCE = 0.65  # Alpha-Apex: Lower confidence threshold during high volatility
+VOLATILITY_BYPASS_CONFIDENCE = 0.60  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 AUTO_FLIP_COOLDOWN_SECONDS = 60  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
 
