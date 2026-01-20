@@ -13,7 +13,7 @@ import json
 import logging
 import urllib.parse
 import uuid
-from typing import Dict, Any, Optional, List
+from typing import Union, Dict, Any, Optional, List
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
