@@ -301,7 +301,8 @@ class AetherEvo:
                 if signal['action'] in ['BUY', 'SELL']:
                     if self.discovery.weex:
                         # Clean the symbol: remove 'cmt_' prefix and '/' separator, convert to uppercase
-                        clean_symbol = self.symbol.replace('/', '').replace('cmt_', '').upper()
+                        #clean_symbol = self.symbol.replace('/', '').replace('cmt_', '').upper()
+                        clean_symbol = self.symbol.lower()
                         
                         try:
                             # Get trade size from config
