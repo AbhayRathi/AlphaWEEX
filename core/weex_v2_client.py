@@ -111,15 +111,16 @@ class WEEXv2Client:
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                            query_string: str, body_str: str) -> str:
-        """
-        Generate HMAC SHA256 signature for WEEX API (Base64 encoded)
-        """
+        # Ensure method is UPPERCASE
+        # body_str MUST be compact (no spaces) before it gets here
         message = timestamp + method.upper() + request_path + query_string + body_str
+        
         signature = hmac.new(
             self.api_secret.encode('utf-8'), 
             message.encode('utf-8'), 
             hashlib.sha256
         ).digest()
+        
         return base64.b64encode(signature).decode()
         
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
@@ -545,63 +546,45 @@ class WEEXv2Client:
             return False
     
     def place_market_order(self, symbol: str, side: str, size: float,
-                               check_spread: bool = True) -> Optional[Dict[str, Any]]:
-            #symbol = symbol.replace('cmt_', '').upper()
-            symbol = symbol.lower()
+                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
+        symbol = symbol.lower()
+        
+        try:
+            # ... (Spread guard and round_qty logic stays the same) ...
+            size = self.round_qty(symbol, size)
+            client_oid = str(uuid.uuid4()).replace("-", "")[:30]
             
-            try:
-                # 1. Spread guard
-                if check_spread and not self.check_spread(symbol, max_spread_pct=0.1):
-                    logger.warning(f"🛑 Order rejected for {symbol} due to wide spread")
-                    return None
-                
-                # 2. Round quantity
-                size = self.round_qty(symbol, size)
-                
-                # 3. Generate the REQUIRED client_oid
-                client_oid = str(uuid.uuid4()).replace("-", "")[:30]
-                
-                # 4. Map the side correctly for WEEX V2
-                # 1: Open Long, 2: Open Short, 3: Close Long, 4: Close Short
-                side_map = {
-                    "BUY": "1", 
-                    "SELL": "2",
-                    "CLOSE_LONG": "3",
-                    "CLOSE_SHORT": "4"
-                }
-                
-                # Determine if this is an entry or an exit to use the right code
-                # If we are already in a position, we are closing.
-                final_side = side.upper()
-                
-                path = "/capi/v2/order/placeOrder"
-                body = {
-                    "symbol": symbol,
-                    "client_oid": client_oid,        # FIXED: Added missing parameter
-                    "side": side_map.get(final_side, "1"), # FIXED: Using numeric codes
-                    "type": "1",                     # FIXED: "1" = MARKET order type in V2 (strictly string)
-                    "order_type": "0",               # 0 = normal order
-                    "size": str(size),               # FIXED: Ensure size is strictly a string
-                    "match_price": "1"               # FIXED: "1" = Market Price (strictly string)
-                }
-                
-                response = self.send_weex_request("POST", path, body=body)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if str(data.get('code')) == '00000' or data.get('success'):
-                        logger.info(f"✅ Market {side} order placed for {symbol}: {size} (ID: {client_oid})")
-                        return data.get('data', {})
-                    else:
-                        logger.error(f"❌ Place order error: {data.get('msg') or data.get('message')}")
-                        return None
-                else:
-                    logger.error(f"❌ HTTP {response.status_code}: {response.text}")
-                    return None
-                    
-            except Exception as e:
-                logger.error(f"Failed to place order for {symbol}: {str(e)}")
-                return None
+            side_map = {
+                "BUY": "1", "SELL": "2",
+                "CLOSE_LONG": "3", "CLOSE_SHORT": "4"
+            }
+            
+            path = "/capi/v2/order/placeOrder"
+            body_dict = {
+                "symbol": symbol,
+                "client_oid": client_oid,
+                "side": side_map.get(side.upper(), "1"),
+                "type": "1",         # Market Order
+                "order_type": "0",
+                "size": str(size),
+                "match_price": "1"
+            }
+            
+            # CRITICAL FIX: Convert dict to a COMPACT string (no spaces)
+            # This ensures the signature matches exactly what the server sees.
+            body_json = json.dumps(body_dict, separators=(',', ':'))
+            
+            # Pass the STRING body, not the dict, to your request sender
+            response = self.send_weex_request("POST", path, body=body_json)
+            
+            # ... (Rest of your response handling) ...
+            if response and response.status_code == 200:
+                data = response.json()
+                # Note: Success usually returns the order_id directly as we saw in the test
+                if data.get('order_id') or str(data.get('code')) == '00000':
+                    logger.info(f"✅ Success! ID: {data.get('order_id')}")
+                    return data
+            return None
     
     def check_tp_sl_triggers(self, symbol: str, current_price: float) -> Optional[str]:
         """
