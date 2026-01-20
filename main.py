@@ -430,6 +430,7 @@ class AetherEvo:
                 # 1. Run behavioral analysis with latest market data
                 try:
                     ohlcv = await self.discovery.fetch_ohlcv(self.symbol, '15m', 100)
+                    await asyncio.sleep(2)
                     if ohlcv:
                         current_price = ohlcv[-1][4]
                         
