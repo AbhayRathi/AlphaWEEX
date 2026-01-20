@@ -243,6 +243,42 @@ class TestPlaceMarketOrder:
         assert body['symbol'] == "BTCUSDT"
         assert "cmt_" not in body['symbol']
         assert result is not None
+    
+    @patch.object(WEEXv2Client, 'check_spread')
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_place_market_order_payload_format(self, mock_send_request, mock_check_spread):
+        """Test that place_market_order has correct payload format to avoid 40020 error"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock spread check
+        mock_check_spread.return_value = True
+        
+        # Mock successful response
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"code": "00000", "success": True, "data": {"orderId": "123"}}
+        mock_send_request.return_value = mock_response
+        
+        # Call with a size value
+        result = client.place_market_order("BTCUSDT", "BUY", 0.1234)
+        
+        # Verify payload format
+        call_args = mock_send_request.call_args
+        body = call_args[1]['body']
+        
+        # Ensure size is a string
+        assert isinstance(body['size'], str), "size must be a string"
+        assert body['size'] == "0.1234"
+        
+        # Ensure match_price is strictly the string "1"
+        assert body['match_price'] == "1", "match_price must be the string '1'"
+        assert isinstance(body['match_price'], str), "match_price must be a string"
+        
+        # Ensure type is strictly the string "1" (MARKET order type in V2)
+        assert body['type'] == "1", "type must be the string '1' for MARKET orders"
+        assert isinstance(body['type'], str), "type must be a string"
+        
+        assert result is not None
 
 
 class TestMarketDataMethods:

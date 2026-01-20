@@ -578,10 +578,10 @@ class WEEXv2Client:
                     "symbol": symbol,
                     "client_oid": client_oid,        # FIXED: Added missing parameter
                     "side": side_map.get(final_side, "1"), # FIXED: Using numeric codes
-                    "type": "MARKET",                # 1 is for Market in some versions, but "MARKET" is usually accepted
+                    "type": "1",                     # FIXED: "1" = MARKET order type in V2 (strictly string)
                     "order_type": "0",               # 0 = normal order
-                    "size": str(size),
-                    "match_price": "1"               # 1 = Market Price
+                    "size": str(size),               # FIXED: Ensure size is strictly a string
+                    "match_price": "1"               # FIXED: "1" = Market Price (strictly string)
                 }
                 
                 response = self.send_weex_request("POST", path, body=body)
