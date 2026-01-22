@@ -131,56 +131,79 @@ class WEEXv2Client:
                             body: Union[Dict, str, None] = None) -> requests.Response:
         """
         Send authenticated request to WEEX API using compact JSON for signatures.
+        
+        Alpha-Evo V3: Implements Exponential Backoff for 521 errors
         """
-        # 1. Cooldown check
-        if time.time() - self.last_521_error_time < self.cooldown_seconds:
-            remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
-            logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
-            raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
-    
-        timestamp = str(int(time.time() * 1000))
-    
-        # 2. CRITICAL: Handle body stringification once and keep it compact
-        if body:
-            if isinstance(body, dict):
-                # Use separators to ensure NO whitespace (e.g., {"a":"b"} not {"a": "b"})
-                body_str = json.dumps(body, separators=(',', ':'))
+        # Alpha-Evo V3: Exponential Backoff for 521 errors
+        max_retries = 3
+        base_backoff = 60  # Start at 60 seconds
+        
+        for retry in range(max_retries):
+            # 1. Cooldown check
+            if time.time() - self.last_521_error_time < self.cooldown_seconds:
+                remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
+                logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
+                raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
+        
+            timestamp = str(int(time.time() * 1000))
+        
+            # 2. CRITICAL: Handle body stringification once and keep it compact
+            if body:
+                if isinstance(body, dict):
+                    # Use separators to ensure NO whitespace (e.g., {"a":"b"} not {"a": "b"})
+                    body_str = json.dumps(body, separators=(',', ':'))
+                else:
+                    body_str = body
             else:
-                body_str = body
-        else:
-            body_str = ""
-    
-        # 3. Generate signature using the same body_str that will be sent
-        signature = self.generate_signature(timestamp, method, path, query_params, body_str)
+                body_str = ""
         
-        headers = {
-            "ACCESS-KEY": self.api_key,
-            "ACCESS-SIGN": signature,
-            "ACCESS-PASSPHRASE": self.api_password,
-            "ACCESS-TIMESTAMP": timestamp,
-            "Content-Type": "application/json",
-            "locale": "en-US"
-        }
-        
-        url = f"{self.BASE_URL}{path}{query_params}"
-        
-        try:
-            if method.upper() == "GET":
-                response = self.session.get(url, headers=headers, timeout=30)
-            else:
-                # Send the EXACT body_str used for the signature
-                response = self.session.post(url, headers=headers, data=body_str, timeout=30)
+            # 3. Generate signature using the same body_str that will be sent
+            signature = self.generate_signature(timestamp, method, path, query_params, body_str)
             
-            if response.status_code == 521:
-                logger.error("🔥 521 Error: Firewall block! Starting 60s cooldown...")
-                self.last_521_error_time = time.time()
-                raise Exception("521 Firewall Error - Cooldown initiated")
+            headers = {
+                "ACCESS-KEY": self.api_key,
+                "ACCESS-SIGN": signature,
+                "ACCESS-PASSPHRASE": self.api_password,
+                "ACCESS-TIMESTAMP": timestamp,
+                "Content-Type": "application/json",
+                "locale": "en-US"
+            }
+            
+            url = f"{self.BASE_URL}{path}{query_params}"
+            
+            try:
+                if method.upper() == "GET":
+                    response = self.session.get(url, headers=headers, timeout=30)
+                else:
+                    # Send the EXACT body_str used for the signature
+                    response = self.session.post(url, headers=headers, data=body_str, timeout=30)
                 
-            return response
-            
-        except Exception as e:
-            logger.error(f"❌ Request failed: {str(e)}")
-            raise
+                if response.status_code == 521:
+                    # Alpha-Evo V3: Exponential Backoff
+                    backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
+                    logger.error(f"🔥 521 Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
+                    self.last_521_error_time = time.time()
+                    self.cooldown_seconds = backoff_time
+                    
+                    if retry < max_retries - 1:
+                        time.sleep(backoff_time)
+                        continue  # Retry
+                    else:
+                        raise Exception(f"521 Firewall Error - Max retries ({max_retries}) exceeded")
+                    
+                # Success - reset cooldown to base
+                self.cooldown_seconds = 60
+                return response
+                
+            except Exception as e:
+                if "521" not in str(e) or retry >= max_retries - 1:
+                    logger.error(f"❌ Request failed: {str(e)}")
+                    raise
+                # For 521 errors, continue to retry
+                continue
+        
+        # Defensive fallback - should not reach here due to retry loop logic
+        raise Exception(f"Request failed after {max_retries} retries with exponential backoff (60s, 120s, 240s)")
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
@@ -872,6 +895,7 @@ class WEEXv2Client:
                       indicators: Dict[str, Any], historical_pnl: str) -> bool:
         """
         Alpha-Evo: Upload AI log to WEEX after successful order placement
+        Alpha-Evo V3: Save failed logs to disk for retry
         
         Args:
             order_id: Order ID from placeOrder response
@@ -891,7 +915,7 @@ class WEEXv2Client:
             payload = {
                 "orderId": order_id,
                 "stage": "Decision Making",
-                "model": "GPT-4o-Alpha-Evo-V2",
+                "model": "GPT-4o-Alpha-Evo-V3",
                 "input": {
                     "market_data": {
                         "symbol": clean_symbol,
@@ -921,11 +945,49 @@ class WEEXv2Client:
                     return True
                 else:
                     logger.warning(f"⚠️ AI Log upload returned code {data.get('code')}: {data.get('msg')}")
+                    # Alpha-Evo V3: Save failed log
+                    self._save_failed_log(order_id, payload)
                     return False
             else:
                 logger.warning(f"⚠️ AI Log upload failed (HTTP {response.status_code if response else 'No response'})")
+                # Alpha-Evo V3: Save failed log
+                self._save_failed_log(order_id, payload)
                 return False
                 
         except Exception as e:
             logger.error(f"Failed to upload AI log: {str(e)}")
+            # Alpha-Evo V3: Save failed log
+            try:
+                self._save_failed_log(order_id, payload)
+            except:
+                pass
             return False
+    
+    def _save_failed_log(self, order_id: str, payload: Dict[str, Any]) -> None:
+        """
+        Alpha-Evo V3: Save failed AI log to disk for retry
+        
+        Args:
+            order_id: Order ID
+            payload: AI log payload
+        """
+        try:
+            import os
+            failed_logs_dir = "failed_logs"
+            os.makedirs(failed_logs_dir, exist_ok=True)
+            
+            log_file = os.path.join(failed_logs_dir, f"log_{order_id}.json")
+            
+            # Add timestamp for retry tracking
+            payload["_retry_metadata"] = {
+                "failed_at": time.time(),
+                "retry_count": 0
+            }
+            
+            with open(log_file, 'w') as f:
+                json.dump(payload, f, indent=2)
+            
+            logger.info(f"💾 Failed log saved to {log_file} for retry")
+            
+        except Exception as e:
+            logger.error(f"Failed to save failed log: {str(e)}")

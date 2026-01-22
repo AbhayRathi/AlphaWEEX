@@ -61,3 +61,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Alpha-Evo V3: Failed AI log persistence
+failed_logs/

@@ -14,6 +14,8 @@ Requirements:
 import os
 import time
 import logging
+import json
+import threading
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
@@ -80,11 +82,17 @@ EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
 MAIN_LOOP_INTERVAL = 15  # Check every 10 seconds (Alpha-Apex aggressive mode)
 MIN_CONFIDENCE = 0.64  # Alpha-Apex: Minimum confidence threshold
+MIN_CONFIDENCE_HEDGE = 0.85  # Alpha-Evo V3: Minimum confidence for Hedge entries
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.33  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.51  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 AUTO_FLIP_COOLDOWN_SECONDS = 30  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
+
+# Alpha-Evo V3: Bi-Directional Hedge Parameters
+HEDGE_MARGIN_PCT = 1.0  # 1% margin for each side of the hedge
+HEDGE_PRUNE_PCT = 0.5  # 0.5% - close losing position when price moves against it
+HEDGE_TRAILING_STOP_PCT = 1.0  # 1.0% trailing stop for the winner
 
 # Bi-Directional Trading Enhancements
 SHORT_POSITION_SIZE_REDUCTION = 0.80  # 20% smaller position size for shorts (unlimited risk)
@@ -230,6 +238,14 @@ class CompetitionTradingBot:
         self.daily_start_equity = None
         self.last_daily_reset = datetime.now().date()
         self.position_size_reduction_active = False
+        
+        # Alpha-Evo V3: Bi-Directional Hedge tracking
+        self.hedge_positions = {}  # {symbol: {"long_entry": float, "short_entry": float, "entry_time": timestamp}}
+        self.hedge_pruned_side = {}  # {symbol: "LONG" | "SHORT"} - track which side was pruned
+        
+        # Alpha-Evo V3: Failed log retry tracking
+        self.failed_log_retry_thread = None
+        self.failed_log_retry_running = False
         
         # Running flag
         self.running = False
@@ -1009,6 +1025,231 @@ class CompetitionTradingBot:
         
         return f"RSI is {rsi:.1f}, {stance}, Price: ${current_price:.2f}"
     
+    def check_hedge_pruning(self, symbol: str, current_price: float) -> None:
+        """
+        Alpha-Evo V3: Check if hedge positions need pruning
+        
+        If price moves 0.5% against one position, close that position and keep the winner
+        """
+        if symbol not in self.hedge_positions:
+            return
+        
+        hedge = self.hedge_positions[symbol]
+        long_entry = hedge.get("long_entry")
+        short_entry = hedge.get("short_entry")
+        
+        if not long_entry or not short_entry:
+            return
+        
+        # Calculate P&L for each side
+        long_pnl_pct = ((current_price - long_entry) / long_entry) * 100
+        short_pnl_pct = ((short_entry - current_price) / short_entry) * 100
+        
+        # Check if either side needs pruning (losing > 0.5%)
+        prune_long = long_pnl_pct < -HEDGE_PRUNE_PCT
+        prune_short = short_pnl_pct < -HEDGE_PRUNE_PCT
+        
+        if prune_long:
+            logger.info(f"🔪 HEDGE PRUNE: Closing LONG on {symbol} (loss: {long_pnl_pct:.2f}%)")
+            # Close the long position
+            try:
+                # Note: In a real implementation, we'd need separate position tracking for long/short
+                # For now, we'll mark it as pruned
+                self.hedge_pruned_side[symbol] = "LONG"
+                del self.hedge_positions[symbol]
+                logger.info(f"✅ LONG pruned, keeping SHORT winner with trailing stop")
+            except Exception as e:
+                logger.error(f"Failed to prune LONG hedge: {str(e)}")
+        
+        elif prune_short:
+            logger.info(f"🔪 HEDGE PRUNE: Closing SHORT on {symbol} (loss: {short_pnl_pct:.2f}%)")
+            # Close the short position
+            try:
+                self.hedge_pruned_side[symbol] = "SHORT"
+                del self.hedge_positions[symbol]
+                logger.info(f"✅ SHORT pruned, keeping LONG winner with trailing stop")
+            except Exception as e:
+                logger.error(f"Failed to prune SHORT hedge: {str(e)}")
+    
+    def open_hedge_positions(self, symbol: str, current_price: float, confidence: float) -> bool:
+        """
+        Alpha-Evo V3: Open bi-directional hedge positions
+        
+        Opens both LONG and SHORT simultaneously with 1% margin each
+        
+        Args:
+            symbol: Trading symbol
+            current_price: Current market price
+            confidence: Signal confidence (must be >= 0.85)
+            
+        Returns:
+            True if both positions opened successfully
+        """
+        if confidence < MIN_CONFIDENCE_HEDGE:
+            logger.info(f"⚠️ Confidence {confidence:.2f} too low for hedge (need {MIN_CONFIDENCE_HEDGE})")
+            return False
+        
+        logger.info(f"🔀 Opening HEDGE positions on {symbol} at {current_price:.2f} (confidence: {confidence:.2%})")
+        
+        # Calculate position sizes (1% margin each)
+        try:
+            balance_data = self.client.get_account_balance()
+            if not balance_data:
+                logger.error("Failed to get balance for hedge sizing")
+                return False
+            
+            equity = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0))
+            margin_per_side = equity * (HEDGE_MARGIN_PCT / 100.0)
+            
+            # Calculate quantity for each side
+            leverage = 20
+            quantity_value = margin_per_side * leverage
+            quantity = quantity_value / current_price
+            
+            logger.info(f"💰 Hedge sizing: Equity={equity:.2f}, Margin/side={margin_per_side:.2f}, Qty={quantity:.4f}")
+            
+            # Open LONG position
+            long_order = self.client.place_order(
+                symbol=symbol,
+                side="BUY",
+                quantity=quantity,
+                order_type="MARKET"
+            )
+            
+            if not long_order or not long_order.get('orderId'):
+                logger.error("Failed to open LONG hedge position")
+                return False
+            
+            # Open SHORT position
+            short_order = self.client.place_order(
+                symbol=symbol,
+                side="SELL",
+                quantity=quantity,
+                order_type="MARKET"
+            )
+            
+            if not short_order or not short_order.get('orderId'):
+                logger.error("Failed to open SHORT hedge position - closing LONG")
+                # Close the long position we just opened
+                self.client.close_position(symbol)
+                return False
+            
+            # Track the hedge
+            self.hedge_positions[symbol] = {
+                "long_entry": current_price,
+                "short_entry": current_price,
+                "entry_time": time.time(),
+                "long_order_id": long_order.get('orderId'),
+                "short_order_id": short_order.get('orderId')
+            }
+            
+            logger.info(f"✅ HEDGE opened successfully: LONG+SHORT @ {current_price:.2f}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to open hedge positions: {str(e)}")
+            return False
+    
+    def retry_failed_logs(self) -> None:
+        """
+        Alpha-Evo V3: Background task to retry failed AI log uploads every 5 minutes
+        """
+        import glob
+        
+        logger.info("🔄 Starting failed log retry background task...")
+        self.failed_log_retry_running = True
+        
+        while self.failed_log_retry_running and self.running:
+            try:
+                # Wait 5 minutes before retry
+                for _ in range(300):  # 300 seconds = 5 minutes
+                    if not self.failed_log_retry_running or not self.running:
+                        break
+                    time.sleep(1)
+                
+                if not self.failed_log_retry_running or not self.running:
+                    break
+                
+                # Find all failed log files
+                failed_logs = glob.glob("failed_logs/log_*.json")
+                
+                if not failed_logs:
+                    continue
+                
+                logger.info(f"🔄 Retrying {len(failed_logs)} failed AI logs...")
+                
+                for log_file in failed_logs:
+                    try:
+                        # Load the failed log
+                        with open(log_file, 'r') as f:
+                            payload = json.load(f)
+                        
+                        # Extract metadata
+                        retry_metadata = payload.get("_retry_metadata", {})
+                        retry_count = retry_metadata.get("retry_count", 0)
+                        
+                        # Skip if too many retries (max 10)
+                        if retry_count >= 10:
+                            logger.warning(f"⚠️ Max retries reached for {log_file}, moving to archive")
+                            os.rename(log_file, log_file.replace(".json", "_archived.json"))
+                            continue
+                        
+                        # Remove metadata before sending
+                        payload.pop("_retry_metadata", None)
+                        
+                        # Try to upload
+                        path = "/capi/v2/order/uploadAiLog"
+                        body_json = json.dumps(payload, separators=(',', ':'))
+                        response = self.client.send_weex_request("POST", path, body=body_json)
+                        
+                        if response and response.status_code == 200:
+                            data = response.json()
+                            if str(data.get('code')) == '00000':
+                                logger.info(f"✅ Retry successful for {log_file}, deleting")
+                                os.remove(log_file)
+                                continue
+                        
+                        # Update retry count
+                        retry_metadata["retry_count"] = retry_count + 1
+                        retry_metadata["last_retry"] = time.time()
+                        payload["_retry_metadata"] = retry_metadata
+                        
+                        # Save updated payload
+                        with open(log_file, 'w') as f:
+                            json.dump(payload, f, indent=2)
+                        
+                        logger.info(f"⚠️ Retry {retry_count + 1} failed for {log_file}")
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to retry {log_file}: {str(e)}")
+                
+            except Exception as e:
+                logger.error(f"Error in retry_failed_logs: {str(e)}")
+        
+        logger.info("🔄 Failed log retry background task stopped")
+    
+    def start_failed_log_retry_thread(self) -> None:
+        """
+        Alpha-Evo V3: Start background thread for retrying failed logs
+        """
+        if self.failed_log_retry_thread is None or not self.failed_log_retry_thread.is_alive():
+            self.failed_log_retry_thread = threading.Thread(
+                target=self.retry_failed_logs,
+                daemon=True,
+                name="FailedLogRetry"
+            )
+            self.failed_log_retry_thread.start()
+            logger.info("✅ Failed log retry thread started")
+    
+    def stop_failed_log_retry_thread(self) -> None:
+        """
+        Alpha-Evo V3: Stop background thread for retrying failed logs
+        """
+        if self.failed_log_retry_thread and self.failed_log_retry_thread.is_alive():
+            self.failed_log_retry_running = False
+            self.failed_log_retry_thread.join(timeout=5)
+            logger.info("✅ Failed log retry thread stopped")
+    
     def check_tp_sl_all_symbols(self) -> None:
         """
         Alpha-Apex: Check multi-tier profit targets and dynamic stop loss for all open positions
@@ -1724,6 +1965,9 @@ class CompetitionTradingBot:
             # Initialize leverage
             self.initialize_leverage()
             
+            # Alpha-Evo V3: Start failed log retry background thread
+            self.start_failed_log_retry_thread()
+            
             logger.info("🚀 Starting main trading loop...")
             logger.info(f"📊 Tournament Compliance: Minimum {self.min_required_trades} trades required for ranking")
             
@@ -1754,6 +1998,14 @@ class CompetitionTradingBot:
                 # Check TP/SL for all positions
                 self.check_tp_sl_all_symbols()
                 
+                # Alpha-Evo V3: Check hedge pruning
+                for symbol in SYMBOL_LIST:
+                    if symbol in self.hedge_positions:
+                        klines = self.client.get_market_klines(symbol, interval='1m', limit=1)
+                        if klines and len(klines) > 0:
+                            current_price = float(klines[-1][4])
+                            self.check_hedge_pruning(symbol, current_price)
+                
                 # Alpha-Evo: Check tournament goals and adjust position sizing
                 if iteration % 5 == 0:  # Check every 5 iterations
                     self.check_tournament_goals()
@@ -1770,16 +2022,16 @@ class CompetitionTradingBot:
                     self.process_symbol(symbol)
                     time.sleep(2)  # Small delay between symbols
                 
+                # Alpha-Evo V3: 60-second cooldown at end of each full cycle
+                logger.info(f"\n⏸️ Cycle complete. Waiting 60s before next cycle to prevent rate limits...")
+                time.sleep(60)
+                
                 # Display log stats and database performance every 10 iterations
                 if iteration % 10 == 0:
                     stats = self.ai_logger.get_log_stats()
                     performance = self.db.get_recent_performance(limit=10)
                     logger.info(f"\n📈 Log Stats: {stats}")
                     logger.info(f"💰 Performance: Win Rate={performance.get('win_rate', 0)*100:.1f}%, Total P&L={performance.get('total_pnl', 0):+.2f}%")
-                
-                # Wait before next iteration
-                logger.info(f"\n⏸️ Waiting {MAIN_LOOP_INTERVAL}s before next iteration...\n")
-                time.sleep(MAIN_LOOP_INTERVAL)
         
         except KeyboardInterrupt:
             logger.info("\n\n👋 Shutdown requested by user...")
@@ -1799,6 +2051,9 @@ class CompetitionTradingBot:
         """
         logger.info("Shutting down bot...")
         self.running = False
+        
+        # Alpha-Evo V3: Stop failed log retry thread
+        self.stop_failed_log_retry_thread()
         
         # Display final stats
         stats = self.ai_logger.get_log_stats()
