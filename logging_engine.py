@@ -13,7 +13,7 @@ Logs are stored in ai_logs/ directory with ISO timestamp filenames.
 """
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from pathlib import Path
 import logging
@@ -69,7 +69,7 @@ class AILogEngine:
         """
         try:
             # Generate timestamp
-            timestamp = datetime.utcnow().isoformat() + "Z"
+            timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             
             # Build log structure
             log_data = {
@@ -128,7 +128,7 @@ class AILogEngine:
             Path to the generated log file
         """
         try:
-            timestamp = datetime.utcnow().isoformat() + "Z"
+            timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             
             log_data = {
                 "timestamp": timestamp,
