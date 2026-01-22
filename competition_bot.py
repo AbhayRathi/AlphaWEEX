@@ -92,6 +92,16 @@ SELL_SIGNAL_HIGH_CONFIDENCE = 0.78  # Higher confidence required for shorts (was
 STRONG_UPTREND_THRESHOLD = 0.02  # 2% - block shorts when SMA50 > SMA200 * 1.02
 MAX_SHORT_HOLD_HOURS = 48  # Maximum hold time for shorts to avoid funding fee erosion
 
+# Alpha-Evo: ATR-based Stop Loss Parameters
+ATR_PERIOD = 14  # 14-period ATR for dynamic stop loss calculation
+ATR_SL_MIN_PCT = 1.0  # Minimum ATR-based stop loss: 1.0%
+ATR_SL_MAX_PCT = 2.0  # Maximum ATR-based stop loss: 2.0%
+
+# Alpha-Evo: Trailing Stop Parameters
+TRAILING_BREAKEVEN_PCT = 2.0  # Move SL to breakeven at +2% profit
+TRAILING_ACTIVATION_PCT = 4.0  # Activate 1% trailing stop at +4% profit
+TRAILING_STOP_DISTANCE_PCT = 1.0  # 1% trailing distance from peak
+
 
 class CompetitionTradingBot:
     """
@@ -213,17 +223,27 @@ class CompetitionTradingBot:
         # NEW: Short entry time tracking for max hold time
         self.short_entry_times = {}  # Track when each short was opened
         
+        # Alpha-Evo: Tournament goals tracking
+        self.tournament_start_equity = None
+        self.tournament_target_profit = 400.0  # $400 goal
+        self.daily_profit_protection_threshold = 40.0  # $40 daily profit protection
+        self.daily_start_equity = None
+        self.last_daily_reset = datetime.now().date()
+        self.position_size_reduction_active = False
+        
         # Running flag
         self.running = False
         
         logger.info("=" * 60)
-        logger.info("🚀 WEEX AI TRADING BOT - COMPETITION READY")
+        logger.info("🚀 WEEX AI TRADING BOT - COMPETITION READY (ALPHA-EVO)")
         logger.info("=" * 60)
         logger.info(f"📊 Multi-Symbol Support: {', '.join(SYMBOL_LIST)}")
-        logger.info(f"🎯 Risk Management: TP={TAKE_PROFIT_PCT}%, SL={STOP_LOSS_PCT}%")
+        logger.info(f"🎯 Risk Management: TP={TAKE_PROFIT_PCT}%, SL=ATR-based (1-2%)")
         logger.info(f"💰 Equity Sizing: {EQUITY_SIZING_PCT}% per trade")
         logger.info(f"🛑 Kill Switch: {KILL_SWITCH_PCT}% drawdown limit")
+        logger.info(f"🏆 Tournament Goal: $400 profit in 12 days")
         logger.info(f"🔄 Contrarian Sentiment: Funding Rate Analysis Enabled")
+        logger.info(f"📈 Trailing Stop: +2% = Breakeven, +4% = 1% Trail")
         logger.info("=" * 60)
     
     def initialize_leverage(self) -> None:
@@ -339,6 +359,102 @@ class CompetitionTradingBot:
         except Exception as e:
             logger.error(f"Failed to save position state: {str(e)}")
     
+    def get_historical_pnl_summary(self, limit: int = 5) -> str:
+        """
+        Alpha-Evo: Get summary of last N trades for AI log submission
+        
+        Args:
+            limit: Number of recent trades to include
+            
+        Returns:
+            String summary of recent trades
+        """
+        try:
+            # Try to get from trade journal first
+            recent_trades = self.trade_journal.get_recent_trades(limit)
+            
+            if not recent_trades or len(recent_trades) == 0:
+                # Fallback to database if trade journal is empty
+                all_trades = self.db.get_all_trades(limit=limit)
+                if not all_trades or len(all_trades) == 0:
+                    return "No previous trades"
+                
+                # Get only closed trades (those with exit_price)
+                recent_trades_db = [t for t in all_trades if t.get('exit_price') is not None][-limit:]
+                
+                if not recent_trades_db:
+                    return "No completed trades"
+                
+                # Convert DB format to journal format
+                summary_parts = []
+                for trade in recent_trades_db:
+                    direction = trade.get('side', 'UNKNOWN')
+                    outcome = trade.get('outcome')
+                    if outcome is not None:
+                        summary_parts.append(f"{direction}: {outcome:+.2f}%")
+                    else:
+                        summary_parts.append(f"{direction}: pending")
+                
+                return "; ".join(summary_parts) if summary_parts else "No completed trades"
+            
+            # Format trade journal data
+            summary_parts = []
+            for trade in recent_trades:
+                direction = trade.get('direction', 'UNKNOWN')
+                profit_loss = trade.get('profit_loss', 0.0)
+                trigger = trade.get('trigger_type', 'CLOSE')
+                summary_parts.append(f"{direction}: {profit_loss:+.2f}% ({trigger})")
+            
+            return "; ".join(summary_parts) if summary_parts else "No previous trades"
+            
+        except Exception as e:
+            logger.error(f"Failed to get historical PnL summary: {str(e)}")
+            return "Error retrieving trade history"
+    
+    def check_tournament_goals(self) -> None:
+        """
+        Alpha-Evo: Track tournament goals and adjust position sizing
+        - $400 profit goal in 12 days
+        - If daily profit > $40, reduce position size by 50%
+        """
+        try:
+            current_equity = self.get_current_equity()
+            
+            # Initialize tournament start equity
+            if self.tournament_start_equity is None:
+                self.tournament_start_equity = current_equity
+                logger.info(f"🏆 Tournament start equity: ${current_equity:.2f}")
+            
+            # Check if we need to reset daily tracking
+            current_date = datetime.now().date()
+            if current_date != self.last_daily_reset:
+                self.last_daily_reset = current_date
+                self.daily_start_equity = current_equity
+                self.position_size_reduction_active = False
+                logger.info(f"📅 Daily reset: Start equity ${current_equity:.2f}")
+            
+            # Initialize daily start equity
+            if self.daily_start_equity is None:
+                self.daily_start_equity = current_equity
+            
+            # Calculate progress
+            tournament_profit = current_equity - self.tournament_start_equity
+            daily_profit = current_equity - self.daily_start_equity
+            
+            # Check daily profit protection
+            if daily_profit >= self.daily_profit_protection_threshold and not self.position_size_reduction_active:
+                self.position_size_reduction_active = True
+                logger.warning(f"🛡️ Daily profit protection activated: ${daily_profit:.2f} >= ${self.daily_profit_protection_threshold:.2f}")
+                logger.warning(f"   Position size reduced to 50% for rest of day")
+            
+            # Log tournament progress periodically
+            progress_pct = (tournament_profit / self.tournament_target_profit) * 100
+            logger.info(f"🏆 Tournament Progress: ${tournament_profit:+.2f} / ${self.tournament_target_profit:.2f} ({progress_pct:.1f}%)")
+            logger.info(f"📊 Daily P&L: ${daily_profit:+.2f} (Protection: {'ACTIVE' if self.position_size_reduction_active else 'Inactive'})")
+            
+        except Exception as e:
+            logger.error(f"Failed to check tournament goals: {str(e)}")
+    
     def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20, side: str = "BUY") -> float:
         """
         Calculate position size using 10% equity sizing
@@ -358,6 +474,11 @@ class CompetitionTradingBot:
             
             # Calculate position size
             position_value = equity * (EQUITY_SIZING_PCT / 100.0) * leverage
+            
+            # Alpha-Evo: Apply daily profit protection (50% size reduction)
+            if self.position_size_reduction_active:
+                position_value *= 0.5
+                logger.info(f"🛡️ Position size reduced by 50% due to daily profit protection")
             
             # NEW: Smaller size for shorts to account for unlimited risk
             if side == "SELL":
@@ -604,6 +725,74 @@ class CompetitionTradingBot:
         
         return sum(closes[-period:]) / period
     
+    def calculate_ema(self, closes: List[float], period: int = 20) -> float:
+        """
+        Calculate Exponential Moving Average
+        
+        Args:
+            closes: List of closing prices
+            period: EMA period (default: 20)
+            
+        Returns:
+            EMA value
+        """
+        if len(closes) < period:
+            return closes[-1] if closes else 0.0
+        
+        # Calculate smoothing factor
+        k = 2 / (period + 1)
+        
+        # Start with SMA as first EMA value
+        ema = sum(closes[:period]) / period
+        
+        # Calculate EMA for remaining values
+        for i in range(period, len(closes)):
+            ema = closes[i] * k + ema * (1 - k)
+        
+        return ema
+    
+    def calculate_atr(self, klines: List[List], period: int = ATR_PERIOD) -> float:
+        """
+        Calculate Average True Range (ATR) for dynamic stop loss
+        
+        Args:
+            klines: List of klines [timestamp, open, high, low, close, volume]
+            period: ATR period (default: ATR_PERIOD)
+            
+        Returns:
+            ATR value as percentage of current price
+        """
+        if len(klines) < period + 1:
+            return 1.5  # Default to middle of range if insufficient data
+        
+        true_ranges = []
+        for i in range(1, len(klines)):
+            high = float(klines[i][2])
+            low = float(klines[i][3])
+            prev_close = float(klines[i-1][4])
+            
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            true_ranges.append(tr)
+        
+        # Calculate average of last 'period' true ranges
+        if len(true_ranges) < period:
+            atr = sum(true_ranges) / len(true_ranges)
+        else:
+            atr = sum(true_ranges[-period:]) / period
+        
+        # Convert ATR to percentage of current price
+        current_price = float(klines[-1][4])
+        atr_pct = (atr / current_price) * 100
+        
+        # Clamp ATR between ATR_SL_MIN_PCT and ATR_SL_MAX_PCT for stop loss
+        atr_pct = max(ATR_SL_MIN_PCT, min(ATR_SL_MAX_PCT, atr_pct))
+        
+        return atr_pct
+    
     def analyze_market(self, klines: List[List]) -> Dict[str, Any]:
         """
         Analyze market data and generate indicators
@@ -630,6 +819,10 @@ class CompetitionTradingBot:
         rsi = self.calculate_rsi(closes, RSI_PERIOD)
         sma_20 = self.calculate_sma(closes, 20)
         sma_50 = self.calculate_sma(closes, 50)
+        atr_pct = self.calculate_atr(klines, 14)  # Alpha-Evo: 14-period ATR
+        
+        # Calculate EMA-20 for AI log submission
+        ema_20 = self.calculate_ema(closes, 20)
         
         # Price change
         if len(closes) > 1 and closes[0] != 0:
@@ -648,6 +841,8 @@ class CompetitionTradingBot:
             "rsi": rsi,
             "sma_20": sma_20,
             "sma_50": sma_50,
+            "ema_20": ema_20,
+            "atr_pct": atr_pct,
             "price_change_pct": price_change_pct,
             "volume_ratio": volume_ratio,
             "avg_volume": avg_volume
@@ -1171,6 +1366,38 @@ class CompetitionTradingBot:
                 order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True)
                 
                 if order:
+                    # Get order ID for AI log submission
+                    order_id = order.get('orderId') or order.get('order_id')
+                    
+                    # Alpha-Evo: Upload AI log immediately after successful order
+                    if order_id:
+                        # Get market indicators
+                        indicators = self.analyze_market(klines)
+                        historical_pnl = self.get_historical_pnl_summary(5)
+                        
+                        # Calculate TP and SL prices using ATR-based stop loss
+                        atr_pct = indicators.get('atr_pct', 1.5)
+                        tp_price = current_price * (1 + (TAKE_PROFIT_PCT / 100.0))
+                        sl_price = current_price * (1 - (atr_pct / 100.0))
+                        
+                        # Prepare signal data for upload
+                        signal_data_upload = {
+                            "action": "LONG",
+                            "confidence": signal["confidence"],
+                            "reasoning": signal["reason"],
+                            "tp_price": tp_price,
+                            "sl_price": sl_price
+                        }
+                        
+                        # Upload AI log to WEEX
+                        self.client.upload_ai_log(
+                            order_id=order_id,
+                            symbol=symbol,
+                            signal_data=signal_data_upload,
+                            indicators=indicators,
+                            historical_pnl=historical_pnl
+                        )
+                    
                     # Tournament Compliance: Generate AI log for trade
                     model_version = f"{self.strategy_engine.provider.upper()}-Competition-V1" if self.use_llm else "RSI-SMA-Competition-V1"
                     
@@ -1279,6 +1506,38 @@ class CompetitionTradingBot:
                     
                     if order:
                         logger.info(f"✅ SHORT order placed successfully on {symbol}")
+                        
+                        # Get order ID for AI log submission
+                        order_id = order.get('orderId') or order.get('order_id')
+                        
+                        # Alpha-Evo: Upload AI log immediately after successful order
+                        if order_id:
+                            # Get market indicators
+                            indicators = self.analyze_market(klines)
+                            historical_pnl = self.get_historical_pnl_summary(5)
+                            
+                            # Calculate TP and SL prices using ATR-based stop loss
+                            atr_pct = indicators.get('atr_pct', 1.5)
+                            tp_price = current_price * (1 - (TAKE_PROFIT_PCT / 100.0))
+                            sl_price = current_price * (1 + (atr_pct / 100.0))
+                            
+                            # Prepare signal data for upload
+                            signal_data_upload = {
+                                "action": "SHORT",
+                                "confidence": signal["confidence"],
+                                "reasoning": signal["reason"],
+                                "tp_price": tp_price,
+                                "sl_price": sl_price
+                            }
+                            
+                            # Upload AI log to WEEX
+                            self.client.upload_ai_log(
+                                order_id=order_id,
+                                symbol=symbol,
+                                signal_data=signal_data_upload,
+                                indicators=indicators,
+                                historical_pnl=historical_pnl
+                            )
                         
                         # Tournament Compliance: Generate AI log for trade
                         model_version = f"{self.strategy_engine.provider.upper()}-Competition-V1" if self.use_llm else "RSI-SMA-Competition-V1"
@@ -1494,6 +1753,10 @@ class CompetitionTradingBot:
                 
                 # Check TP/SL for all positions
                 self.check_tp_sl_all_symbols()
+                
+                # Alpha-Evo: Check tournament goals and adjust position sizing
+                if iteration % 5 == 0:  # Check every 5 iterations
+                    self.check_tournament_goals()
                 
                 # Save position state every 10 seconds if needed
                 current_time = time.time()
