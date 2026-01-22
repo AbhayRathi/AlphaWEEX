@@ -1249,7 +1249,6 @@ class CompetitionTradingBot:
             self.failed_log_retry_running = False
             self.failed_log_retry_thread.join(timeout=5)
             logger.info("✅ Failed log retry thread stopped")
-            return False
     
     def check_tp_sl_all_symbols(self) -> None:
         """

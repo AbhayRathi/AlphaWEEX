@@ -202,8 +202,8 @@ class WEEXv2Client:
                 # For 521 errors, continue to retry
                 continue
         
-        # Should not reach here
-        raise Exception("Request failed after all retries")
+        # Defensive fallback - should not reach here due to retry loop logic
+        raise Exception(f"Request failed after {max_retries} retries with exponential backoff (60s, 120s, 240s)")
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
