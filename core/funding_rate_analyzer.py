@@ -113,6 +113,9 @@ class FundingRateAnalyzer:
         """
         Adjust technical signal (RSI/MACD) with funding rate sentiment
         
+        Alpha-Evo V3: STRICT FUNDING RATE ENFORCEMENT
+        - If abs(funding_rate) > 0.05%, FORCE trading ONLY in the direction of the funding
+        
         Args:
             technical_signal: Technical indicator signal with action and confidence
             funding_rate: Current funding rate as percentage
@@ -127,63 +130,95 @@ class FundingRateAnalyzer:
         original_action = technical_signal.get("action", "HOLD")
         original_confidence = technical_signal.get("confidence", 0.5)
         
-        # Apply funding rate logic
-        if funding_sentiment["signal"] == "RESTRICT_LONG":
-            # Restrict long trades
-            if original_action == "BUY":
-                # Reduce confidence for BUY signals when funding is extreme positive
-                adjusted_signal["confidence"] = self._adjust_confidence(
-                    original_confidence, 
-                    funding_sentiment["weight"]
-                )
-                adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING ALERT: {funding_sentiment['reasoning']}"
-                
-                # If confidence drops too low, convert to HOLD
-                if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
+        # Alpha-Evo V3: STRICT enforcement - If abs(funding_rate) > 0.05%, force direction
+        if abs(funding_rate) > self.EXTREME_POSITIVE_THRESHOLD:
+            # Apply funding rate logic
+            if funding_sentiment["signal"] == "RESTRICT_LONG":
+                # FORCE: Only allow SHORT or HOLD (block all BUY)
+                if original_action == "BUY":
+                    # FORCE OVERRIDE: Block BUY completely
                     adjusted_signal["action"] = "HOLD"
-                    adjusted_signal["reason"] += " | Overridden to HOLD due to extreme positive funding."
+                    adjusted_signal["confidence"] = 0.0
+                    adjusted_signal["reason"] = f"BLOCKED by funding rate enforcement: {funding_sentiment['reasoning']}"
+                    logger.warning(f"🚫 FORCED BLOCK: BUY trade blocked by extreme positive funding ({funding_rate:.3f}%)")
                 
-                logger.info(f"🛑 Funding Rate Alert: Restricted LONG trade (funding: {funding_rate:.3f}%)")
+                # Boost short confidence when funding is extreme positive
+                elif original_action == "SELL":
+                    adjusted_signal["confidence"] = self._adjust_confidence(
+                        original_confidence,
+                        self.SHORT_CONFIDENCE_BOOST_FACTOR  # Boost by 30%
+                    )
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: Over-leveraged longs, prioritizing short entry."
+                    logger.info(f"📈 Boosted SHORT confidence from {original_confidence:.2%} to {adjusted_signal['confidence']:.2%} (funding: {funding_rate:.3f}%)")
             
-            # NEW: Boost short confidence when funding is extreme positive
-            elif original_action == "SELL":
-                adjusted_signal["confidence"] = self._adjust_confidence(
-                    original_confidence,
-                    self.SHORT_CONFIDENCE_BOOST_FACTOR  # Boost by 30%
-                )
-                adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: Over-leveraged longs, prioritizing short entry."
-                logger.info(f"📈 Boosted SHORT confidence from {original_confidence:.2%} to {adjusted_signal['confidence']:.2%} (funding: {funding_rate:.4%})")
-        
-        elif funding_sentiment["signal"] == "PRIORITIZE_LONG":
-            # Prioritize long trades
-            if original_action == "BUY":
-                # Boost confidence for BUY signals when funding is extreme negative
-                adjusted_signal["confidence"] = self._adjust_confidence(
-                    original_confidence,
-                    funding_sentiment["weight"]
-                )
-                adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: {funding_sentiment['reasoning']}"
-                logger.info(f"🚀 Funding Rate Alert: Prioritized LONG trade (funding: {funding_rate:.3f}%)")
-            
-            elif original_action == "HOLD" and original_confidence >= 0.4:
-                # Upgrade HOLD to BUY if technical signal was borderline
-                adjusted_signal["action"] = "BUY"
-                adjusted_signal["confidence"] = 0.7
-                adjusted_signal["reason"] = f"Upgraded from HOLD. {funding_sentiment['reasoning']}"
-                logger.info(f"🚀 Funding Rate Alert: Upgraded HOLD to BUY (funding: {funding_rate:.3f}%)")
-            
-            elif original_action == "SELL":
-                # Reduce confidence for SELL signals when short-squeeze is likely
-                adjusted_signal["confidence"] = original_confidence * 0.7  # 30% reduction
-                adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING WARNING: {funding_sentiment['reasoning']}"
+            elif funding_sentiment["signal"] == "PRIORITIZE_LONG":
+                # FORCE: Only allow BUY or HOLD (block all SELL)
+                if original_action == "BUY":
+                    # Boost confidence for BUY signals when funding is extreme negative
+                    adjusted_signal["confidence"] = self._adjust_confidence(
+                        original_confidence,
+                        funding_sentiment["weight"]
+                    )
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: {funding_sentiment['reasoning']}"
+                    logger.info(f"🚀 Funding Rate Alert: Prioritized LONG trade (funding: {funding_rate:.3f}%)")
                 
-                if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
+                elif original_action == "HOLD" and original_confidence >= 0.4:
+                    # Upgrade HOLD to BUY if technical signal was borderline
+                    adjusted_signal["action"] = "BUY"
+                    adjusted_signal["confidence"] = 0.7
+                    adjusted_signal["reason"] = f"Upgraded from HOLD. {funding_sentiment['reasoning']}"
+                    logger.info(f"🚀 Funding Rate Alert: Upgraded HOLD to BUY (funding: {funding_rate:.3f}%)")
+                
+                elif original_action == "SELL":
+                    # FORCE OVERRIDE: Block SELL completely
                     adjusted_signal["action"] = "HOLD"
-                    adjusted_signal["reason"] += " | Overridden to HOLD due to short-squeeze risk."
-        
+                    adjusted_signal["confidence"] = 0.0
+                    adjusted_signal["reason"] = f"BLOCKED by funding rate enforcement: {funding_sentiment['reasoning']}"
+                    logger.warning(f"🚫 FORCED BLOCK: SELL trade blocked by extreme negative funding ({funding_rate:.3f}%)")
         else:
-            # Neutral funding - no adjustment needed
-            adjusted_signal["funding_sentiment"] = funding_sentiment
+            # Neutral funding or mild funding - apply softer adjustments
+            if funding_sentiment["signal"] == "RESTRICT_LONG":
+                if original_action == "BUY":
+                    # Reduce confidence for BUY signals
+                    adjusted_signal["confidence"] = self._adjust_confidence(
+                        original_confidence, 
+                        funding_sentiment["weight"]
+                    )
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING ALERT: {funding_sentiment['reasoning']}"
+                    
+                    # If confidence drops too low, convert to HOLD
+                    if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
+                        adjusted_signal["action"] = "HOLD"
+                        adjusted_signal["reason"] += " | Overridden to HOLD due to positive funding."
+                    
+                    logger.info(f"🛑 Funding Rate Alert: Restricted LONG trade (funding: {funding_rate:.3f}%)")
+                
+                elif original_action == "SELL":
+                    adjusted_signal["confidence"] = self._adjust_confidence(
+                        original_confidence,
+                        self.SHORT_CONFIDENCE_BOOST_FACTOR  # Boost by 30%
+                    )
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: Over-leveraged longs."
+            
+            elif funding_sentiment["signal"] == "PRIORITIZE_LONG":
+                if original_action == "BUY":
+                    adjusted_signal["confidence"] = self._adjust_confidence(
+                        original_confidence,
+                        funding_sentiment["weight"]
+                    )
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING BOOST: {funding_sentiment['reasoning']}"
+                
+                elif original_action == "SELL":
+                    adjusted_signal["confidence"] = original_confidence * 0.7  # 30% reduction
+                    adjusted_signal["reason"] = f"{technical_signal.get('reason', 'Technical signal')} | FUNDING WARNING: {funding_sentiment['reasoning']}"
+                    
+                    if adjusted_signal["confidence"] < self.CONFIDENCE_THRESHOLD:
+                        adjusted_signal["action"] = "HOLD"
+                        adjusted_signal["reason"] += " | Overridden to HOLD due to short-squeeze risk."
+            
+            else:
+                # Neutral funding - no adjustment needed
+                adjusted_signal["funding_sentiment"] = funding_sentiment
         
         # Add funding context to the signal
         adjusted_signal["funding_rate"] = funding_rate
