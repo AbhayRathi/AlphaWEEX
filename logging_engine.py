@@ -89,8 +89,12 @@ class AILogEngine:
             if trade_id:
                 log_data["trade_id"] = trade_id
             
-            # Generate filename with timestamp
-            filename = f"trade_{timestamp.replace(':', '-').replace('.', '_')}.json"
+            # Generate filename with timestamp (sanitized for filesystem compatibility)
+            # Remove or replace characters that may cause issues on different filesystems
+            safe_timestamp = timestamp.replace(':', '-').replace('.', '_')
+            # Additional sanitization to ensure cross-platform compatibility
+            safe_timestamp = ''.join(c if c.isalnum() or c in '-_' else '_' for c in safe_timestamp)
+            filename = f"trade_{safe_timestamp}.json"
             filepath = self.log_dir / filename
             
             # Write log file
@@ -140,7 +144,10 @@ class AILogEngine:
                 "symbol": symbol
             }
             
-            filename = f"decision_{timestamp.replace(':', '-').replace('.', '_')}.json"
+            # Generate filename with sanitized timestamp
+            safe_timestamp = timestamp.replace(':', '-').replace('.', '_')
+            safe_timestamp = ''.join(c if c.isalnum() or c in '-_' else '_' for c in safe_timestamp)
+            filename = f"decision_{safe_timestamp}.json"
             filepath = self.log_dir / filename
             
             with open(filepath, 'w') as f:

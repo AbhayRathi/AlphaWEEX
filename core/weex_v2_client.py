@@ -18,6 +18,10 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# WEEX API Error Codes
+ERROR_CODE_SUCCESS = '00000'
+ERROR_CODE_INSUFFICIENT_BALANCE = '40015'
+
 class WEEXv2Client:
     """
     WEEX v2 API Client with verified authentication
@@ -590,8 +594,8 @@ class WEEXv2Client:
                 
                 # Tournament Compliance: Self-Healing for Error 40015 (Insufficient Balance)
                 error_code = str(data.get('code', ''))
-                if error_code == '40015':
-                    logger.error(f"🚨 Error 40015: Insufficient Balance detected for {symbol}")
+                if error_code == ERROR_CODE_INSUFFICIENT_BALANCE:
+                    logger.error(f"🚨 Error {ERROR_CODE_INSUFFICIENT_BALANCE}: Insufficient Balance detected for {symbol}")
                     logger.info("🔧 Self-healing: Triggering closePositions...")
                     # Close all positions to release margin
                     try:
@@ -602,7 +606,7 @@ class WEEXv2Client:
                     return None
                 
                 # Note: Success usually returns the order_id directly as we saw in the test
-                if data.get('order_id') or str(data.get('code')) == '00000':
+                if data.get('order_id') or error_code == ERROR_CODE_SUCCESS:
                     logger.info(f"✅ Success! ID: {data.get('order_id')}")
                     return data
             return None
