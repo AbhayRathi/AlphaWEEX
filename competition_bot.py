@@ -365,9 +365,15 @@ class CompetitionTradingBot:
             
             if not recent_trades or len(recent_trades) == 0:
                 # Fallback to database if trade journal is empty
-                recent_trades_db = self.db.get_recent_trades(limit)
-                if not recent_trades_db or len(recent_trades_db) == 0:
+                all_trades = self.db.get_all_trades(limit=limit)
+                if not all_trades or len(all_trades) == 0:
                     return "No previous trades"
+                
+                # Get only closed trades (those with exit_price)
+                recent_trades_db = [t for t in all_trades if t.get('exit_price') is not None][-limit:]
+                
+                if not recent_trades_db:
+                    return "No completed trades"
                 
                 # Convert DB format to journal format
                 summary_parts = []
