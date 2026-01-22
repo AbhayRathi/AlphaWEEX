@@ -8,6 +8,7 @@ Tests for:
 4. Tournament goals tracking
 5. Historical PnL retrieval
 """
+import json
 from competition_bot import CompetitionTradingBot
 from core.weex_v2_client import WEEXv2Client
 
@@ -142,8 +143,7 @@ def test_upload_ai_log_payload_format():
     }
     historical_pnl = "LONG: +2.5% (TP); SHORT: -1.2% (SL); LONG: +1.8% (PARTIAL_1)"
     
-    # Create expected payload structure
-    import json
+    # Expected payload structure
     expected_keys = ["orderId", "stage", "model", "input", "output", "explanation"]
     expected_input_keys = ["market_data", "prompt"]
     expected_market_data_keys = ["symbol", "rsi_14", "ema_20", "historical_pnl"]

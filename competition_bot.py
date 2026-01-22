@@ -92,6 +92,16 @@ SELL_SIGNAL_HIGH_CONFIDENCE = 0.78  # Higher confidence required for shorts (was
 STRONG_UPTREND_THRESHOLD = 0.02  # 2% - block shorts when SMA50 > SMA200 * 1.02
 MAX_SHORT_HOLD_HOURS = 48  # Maximum hold time for shorts to avoid funding fee erosion
 
+# Alpha-Evo: ATR-based Stop Loss Parameters
+ATR_PERIOD = 14  # 14-period ATR for dynamic stop loss calculation
+ATR_SL_MIN_PCT = 1.0  # Minimum ATR-based stop loss: 1.0%
+ATR_SL_MAX_PCT = 2.0  # Maximum ATR-based stop loss: 2.0%
+
+# Alpha-Evo: Trailing Stop Parameters
+TRAILING_BREAKEVEN_PCT = 2.0  # Move SL to breakeven at +2% profit
+TRAILING_ACTIVATION_PCT = 4.0  # Activate 1% trailing stop at +4% profit
+TRAILING_STOP_DISTANCE_PCT = 1.0  # 1% trailing distance from peak
+
 
 class CompetitionTradingBot:
     """
@@ -741,13 +751,13 @@ class CompetitionTradingBot:
         
         return ema
     
-    def calculate_atr(self, klines: List[List], period: int = 14) -> float:
+    def calculate_atr(self, klines: List[List], period: int = ATR_PERIOD) -> float:
         """
         Calculate Average True Range (ATR) for dynamic stop loss
         
         Args:
             klines: List of klines [timestamp, open, high, low, close, volume]
-            period: ATR period (default: 14)
+            period: ATR period (default: ATR_PERIOD)
             
         Returns:
             ATR value as percentage of current price
@@ -778,8 +788,8 @@ class CompetitionTradingBot:
         current_price = float(klines[-1][4])
         atr_pct = (atr / current_price) * 100
         
-        # Clamp ATR between 1.0% and 2.0% for stop loss
-        atr_pct = max(1.0, min(2.0, atr_pct))
+        # Clamp ATR between ATR_SL_MIN_PCT and ATR_SL_MAX_PCT for stop loss
+        atr_pct = max(ATR_SL_MIN_PCT, min(ATR_SL_MAX_PCT, atr_pct))
         
         return atr_pct
     
