@@ -37,6 +37,7 @@ active_logic.py.backup
 # Logs
 *.log
 data/reasoning_logs.jsonl
+ai_logs/
 
 # Databases and generated data
 data/*.db

@@ -25,6 +25,7 @@ from core.strategy_engine import StrategyEngine
 from core.funding_rate_analyzer import FundingRateAnalyzer
 from core.trade_journal import TradeJournal
 from core.position_state import PositionStatePersistence
+from logging_engine import AILogEngine
 
 # Load environment variables
 load_dotenv()
@@ -126,6 +127,9 @@ class CompetitionTradingBot:
         # Initialize AI logger
         self.ai_logger = AITradingLogger("ai_trading.log")
         
+        # Initialize AI Log Engine for tournament compliance
+        self.ai_log_engine = AILogEngine("ai_logs")
+        
         # Initialize database manager
         self.db = DatabaseManager("trading_memory.db")
         
@@ -146,6 +150,10 @@ class CompetitionTradingBot:
         
         # Track last state save time
         self.last_state_save_time = time.time()
+        
+        # Tournament Compliance: Minimum trade count tracking
+        self.valid_trade_count = 0
+        self.min_required_trades = 10
         
         # Initialize strategy engine (LLM or fallback)
         self.use_llm = use_llm
@@ -232,6 +240,70 @@ class CompetitionTradingBot:
                 logger.warning(f"⚠️ Failed to set leverage for {symbol} (continuing anyway)")
         
         logger.info("✅ Leverage initialization complete")
+    
+    def check_frozen_balance(self) -> bool:
+        """
+        Tournament Compliance: Check for frozen balance at startup
+        (Equity > 0 but Available = 0)
+        
+        Returns:
+            True if balance is frozen, False otherwise
+        """
+        try:
+            balance_data = self.client.get_account_balance()
+            if not balance_data:
+                return False
+            
+            equity = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0))
+            available = float(balance_data.get('availableBalance', 0) or balance_data.get('available', 0))
+            
+            is_frozen = equity > 0 and available == 0
+            
+            if is_frozen:
+                logger.warning(f"⚠️ Frozen balance detected: Equity={equity}, Available={available}")
+            
+            return is_frozen
+            
+        except Exception as e:
+            logger.error(f"Failed to check frozen balance: {str(e)}")
+            return False
+    
+    def auto_initialize(self) -> None:
+        """
+        Tournament Compliance: Auto-initialization routine
+        Checks for frozen balance and automatically executes cleanup:
+        1. Close all positions
+        2. Cancel all orders
+        """
+        logger.info("🔧 Running auto-initialization check...")
+        
+        # Check for frozen balance
+        if self.check_frozen_balance():
+            logger.warning("🚨 Frozen balance detected - executing auto-initialization...")
+            
+            # Step 1: Close all positions
+            logger.info("1️⃣ Closing all positions...")
+            self.close_all_positions()
+            time.sleep(2)  # Wait for positions to close
+            
+            # Step 2: Cancel all orders
+            logger.info("2️⃣ Cancelling all orders...")
+            for symbol in SYMBOL_LIST:
+                try:
+                    self.client.cancel_all_orders(symbol)
+                    logger.info(f"✅ Cancelled orders for {symbol}")
+                except Exception as e:
+                    logger.error(f"Failed to cancel orders for {symbol}: {str(e)}")
+            
+            time.sleep(2)  # Wait for cleanup to complete
+            
+            # Verify balance is unfrozen
+            if self.check_frozen_balance():
+                logger.error("❌ Balance still frozen after auto-initialization")
+            else:
+                logger.info("✅ Auto-initialization complete - balance unfrozen")
+        else:
+            logger.info("✅ No frozen balance detected - ready to trade")
     
     def get_current_equity(self) -> float:
         """
@@ -1087,12 +1159,58 @@ class CompetitionTradingBot:
                 # Calculate position size dynamically
                 position_size = self.calculate_position_size(symbol, current_price)
                 
+                # Tournament Compliance: Verify 20x leverage before placing order
+                leverage_ok = self.client.set_leverage(symbol, leverage=20)
+                if not leverage_ok:
+                    logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - skipping trade")
+                    return
+                
                 # Place BUY order
                 logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
                 
                 order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True)
                 
                 if order:
+                    # Tournament Compliance: Generate AI log for trade
+                    model_version = f"{self.strategy_engine.provider.upper()}-Competition-V1" if self.use_llm else "RSI-SMA-Competition-V1"
+                    
+                    # Gather inputs for AI log
+                    log_inputs = {
+                        "current_price": current_price,
+                        "confidence": signal["confidence"],
+                        "behavioral_tag": behavioral_tag
+                    }
+                    
+                    # Add technical indicators if available
+                    if not self.use_llm:
+                        market_analysis = self.analyze_market(klines)
+                        log_inputs["rsi"] = market_analysis.get("rsi", 0)
+                        log_inputs["sma_20"] = market_analysis.get("sma_20", 0)
+                        log_inputs["sma_50"] = market_analysis.get("sma_50", 0)
+                    
+                    # Add funding rate if available
+                    try:
+                        funding_rate = self.funding_analyzer.get_funding_rate(symbol)
+                        if funding_rate:
+                            log_inputs["funding_rate"] = funding_rate
+                    except:
+                        pass
+                    
+                    self.ai_log_engine.generate_trade_log(
+                        symbol=symbol,
+                        side="buy",
+                        size=str(position_size),
+                        leverage="20",
+                        model_version=model_version,
+                        ai_reasoning=signal["reason"],
+                        inputs=log_inputs,
+                        trade_id=order.get('orderId')
+                    )
+                    
+                    # Tournament Compliance: Increment valid trade count
+                    self.valid_trade_count += 1
+                    logger.info(f"📊 Valid trade count: {self.valid_trade_count}/{self.min_required_trades}")
+                    
                     # Enhancement 3: Track pending order
                     order_id = order.get('orderId')
                     if order_id:
@@ -1150,11 +1268,57 @@ class CompetitionTradingBot:
                     # Calculate position size for SHORT
                     position_size = self.calculate_position_size(symbol, current_price, side="SELL")
                     
+                    # Tournament Compliance: Verify 20x leverage before placing order
+                    leverage_ok = self.client.set_leverage(symbol, leverage=20)
+                    if not leverage_ok:
+                        logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - skipping trade")
+                        return
+                    
                     # Place SELL order to open SHORT
                     order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True)
                     
                     if order:
                         logger.info(f"✅ SHORT order placed successfully on {symbol}")
+                        
+                        # Tournament Compliance: Generate AI log for trade
+                        model_version = f"{self.strategy_engine.provider.upper()}-Competition-V1" if self.use_llm else "RSI-SMA-Competition-V1"
+                        
+                        # Gather inputs for AI log
+                        log_inputs = {
+                            "current_price": current_price,
+                            "confidence": signal["confidence"],
+                            "behavioral_tag": behavioral_tag
+                        }
+                        
+                        # Add technical indicators if available
+                        if not self.use_llm:
+                            market_analysis = self.analyze_market(klines)
+                            log_inputs["rsi"] = market_analysis.get("rsi", 0)
+                            log_inputs["sma_20"] = market_analysis.get("sma_20", 0)
+                            log_inputs["sma_50"] = market_analysis.get("sma_50", 0)
+                        
+                        # Add funding rate if available
+                        try:
+                            funding_rate = self.funding_analyzer.get_funding_rate(symbol)
+                            if funding_rate:
+                                log_inputs["funding_rate"] = funding_rate
+                        except:
+                            pass
+                        
+                        self.ai_log_engine.generate_trade_log(
+                            symbol=symbol,
+                            side="sell",
+                            size=str(position_size),
+                            leverage="20",
+                            model_version=model_version,
+                            ai_reasoning=signal["reason"],
+                            inputs=log_inputs,
+                            trade_id=order.get('orderId')
+                        )
+                        
+                        # Tournament Compliance: Increment valid trade count
+                        self.valid_trade_count += 1
+                        logger.info(f"📊 Valid trade count: {self.valid_trade_count}/{self.min_required_trades}")
                         
                         # NEW: Verify position with brief wait
                         time.sleep(1.5)  # Give exchange time to update
@@ -1295,10 +1459,14 @@ class CompetitionTradingBot:
                 self.strategy_engine.reset_circuit_breaker()
                 logger.info("✅ Circuit breaker reset on startup")
             
+            # Tournament Compliance: Run auto-initialization check
+            self.auto_initialize()
+            
             # Initialize leverage
             self.initialize_leverage()
             
             logger.info("🚀 Starting main trading loop...")
+            logger.info(f"📊 Tournament Compliance: Minimum {self.min_required_trades} trades required for ranking")
             
             iteration = 0
             
