@@ -587,6 +587,20 @@ class WEEXv2Client:
             # ... (Rest of your response handling) ...
             if response and response.status_code == 200:
                 data = response.json()
+                
+                # Tournament Compliance: Self-Healing for Error 40015 (Insufficient Balance)
+                error_code = str(data.get('code', ''))
+                if error_code == '40015':
+                    logger.error(f"🚨 Error 40015: Insufficient Balance detected for {symbol}")
+                    logger.info("🔧 Self-healing: Triggering closePositions...")
+                    # Close all positions to release margin
+                    try:
+                        self.close_all_positions()
+                        logger.info("✅ Self-healing: All positions closed")
+                    except Exception as heal_error:
+                        logger.error(f"Failed to self-heal: {str(heal_error)}")
+                    return None
+                
                 # Note: Success usually returns the order_id directly as we saw in the test
                 if data.get('order_id') or str(data.get('code')) == '00000':
                     logger.info(f"✅ Success! ID: {data.get('order_id')}")
@@ -707,6 +721,57 @@ class WEEXv2Client:
             return True
         else:
             logger.error(f"❌ Failed to close position for {symbol}")
+            return False
+    
+    def close_all_positions(self) -> None:
+        """
+        Tournament Compliance: Close all open positions
+        Used for auto-initialization and self-healing
+        """
+        logger.info("🔄 Closing all open positions...")
+        positions_to_close = list(self.open_positions.keys())
+        
+        for symbol in positions_to_close:
+            try:
+                self.close_position(symbol)
+                time.sleep(0.5)  # Small delay between closes
+            except Exception as e:
+                logger.error(f"Failed to close position for {symbol}: {str(e)}")
+        
+        logger.info(f"✅ Closed {len(positions_to_close)} positions")
+    
+    def cancel_all_orders(self, symbol: str) -> bool:
+        """
+        Tournament Compliance: Cancel all pending orders for a symbol
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            clean_symbol = self.clean_symbol(symbol)
+            path = "/capi/v2/order/cancelAllOrders"
+            
+            body_dict = {
+                "symbol": clean_symbol.lower()
+            }
+            
+            body_json = json.dumps(body_dict, separators=(',', ':'))
+            response = self.send_weex_request("POST", path, body=body_json)
+            
+            if response and response.status_code == 200:
+                data = response.json()
+                if str(data.get('code')) == '00000':
+                    logger.info(f"✅ All orders cancelled for {symbol}")
+                    return True
+            
+            logger.warning(f"⚠️ Failed to cancel orders for {symbol}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to cancel orders for {symbol}: {str(e)}")
             return False
     
     def close_partial_position(self, symbol: str, percentage: float) -> Optional[Dict[str, Any]]:
