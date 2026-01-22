@@ -81,8 +81,8 @@ EFFECTIVE_SL_PCT = STOP_LOSS_PCT + TAKER_FEE_PCT  # 1% + 0.06% = 1.06%
 # Trading Parameters
 POSITION_SIZE = 0.001  # Default position size (adjust based on capital)
 MAIN_LOOP_INTERVAL = 15  # Check every 10 seconds (Alpha-Apex aggressive mode)
-MIN_CONFIDENCE = 0.64  # Alpha-Apex: Minimum confidence threshold
-MIN_CONFIDENCE_HEDGE = 0.85  # Alpha-Evo V3: Minimum confidence for Hedge entries
+MIN_CONFIDENCE = 0.65  # Aggressive: Reduced from 0.80 to catch more opportunities
+MIN_CONFIDENCE_HEDGE = 0.70  # Aggressive: Reduced from 0.85 for more hedge entries
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
 VOLATILITY_BYPASS_THRESHOLD = 0.33  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.51  # Alpha-Apex: Lower confidence threshold during high volatility
@@ -1572,6 +1572,11 @@ class CompetitionTradingBot:
             # Alpha-Apex: Determine effective confidence threshold
             confidence_threshold = VOLATILITY_BYPASS_CONFIDENCE if volatility_bypass else MIN_CONFIDENCE
             
+            # Aggressive: DEBUG logging for transparency
+            if signal["action"] in ["BUY", "SELL"]:
+                status = "PASS" if signal["confidence"] >= confidence_threshold else "FAIL"
+                print(f"DEBUG: [{symbol}] Confidence is {signal['confidence']:.2%}, Threshold is {confidence_threshold:.2%}. Status: {status}")
+            
             # 6. Execute trade if confidence is high enough
             # Alpha-Apex: Support both BUY (Long) and SELL (Short) with confidence >= threshold
             if signal["action"] == "BUY" and signal["confidence"] >= confidence_threshold:
@@ -1910,6 +1915,68 @@ class CompetitionTradingBot:
                 # Enhancement 9: Enhanced logging - Low confidence
                 if signal["confidence"] < confidence_threshold:
                     logger.debug(f"🚫 Skipping {symbol}: Confidence too low ({signal['confidence']:.1%} < {confidence_threshold:.0%})")
+                
+                # Aggressive: HOLD override - if 1-hour trend is strong, allow Single-Direction trade at 65% confidence
+                if len(klines) >= 60 and signal["confidence"] >= 0.65 and not self.client.has_open_position(symbol):
+                    # Calculate 1-hour price change
+                    hour_ago_price = float(klines[-60][4])  # Close price from 60 candles ago
+                    hour_price_change_pct = ((current_price - hour_ago_price) / hour_ago_price) * 100
+                    
+                    # Strong trend threshold: >2% in 1 hour
+                    strong_trend_threshold = 2.0
+                    
+                    if abs(hour_price_change_pct) > strong_trend_threshold:
+                        # Determine direction based on trend
+                        override_action = "BUY" if hour_price_change_pct > 0 else "SELL"
+                        logger.info(f"⚡ HOLD OVERRIDE: {symbol} has strong 1h trend ({hour_price_change_pct:+.2f}%) - Opening {override_action} at {signal['confidence']:.2%} confidence")
+                        
+                        # Check global exposure limit
+                        current_exposure = self.calculate_total_exposure()
+                        new_position_pct = EQUITY_SIZING_PCT
+                        if current_exposure + new_position_pct <= GLOBAL_MAX_EXPOSURE_PCT:
+                            # Check volume spike filter
+                            if self.is_volume_spike(klines):
+                                # Calculate position size
+                                position_size = self.calculate_position_size(symbol, current_price, side=override_action)
+                                
+                                # Set leverage
+                                leverage_ok = self.client.set_leverage(symbol, leverage=20)
+                                if leverage_ok:
+                                    # Place order
+                                    order = self.client.place_market_order(symbol, override_action, position_size, check_spread=True)
+                                    
+                                    if order:
+                                        logger.info(f"✅ HOLD OVERRIDE {override_action} order placed on {symbol}")
+                                        
+                                        # Record in database
+                                        self.position_open_times[symbol] = time.time()
+                                        if override_action == "SELL":
+                                            self.short_entry_times[symbol] = time.time()
+                                        
+                                        override_reason = f"HOLD override: Strong 1h trend {hour_price_change_pct:+.2f}%"
+                                        self.db.record_trade_entry(
+                                            symbol=symbol,
+                                            side=override_action,
+                                            price=current_price,
+                                            size=position_size,
+                                            reasoning=override_reason,
+                                            confidence=signal["confidence"],
+                                            ai_reasoning=override_reason,
+                                            behavioral_tag=behavioral_tag,
+                                            confidence_score=signal["confidence"]
+                                        )
+                                        
+                                        # Log execution
+                                        self.ai_logger.log_order_execution(
+                                            symbol=symbol,
+                                            side=override_action,
+                                            size=position_size,
+                                            price=current_price,
+                                            order_id=order.get('orderId')
+                                        )
+                                        
+                                        # Increment valid trade count
+                                        self.valid_trade_count += 1
             
             # Enhancement 8: Check position timeout
             if symbol in self.position_open_times:
@@ -2022,9 +2089,9 @@ class CompetitionTradingBot:
                     self.process_symbol(symbol)
                     time.sleep(2)  # Small delay between symbols
                 
-                # Alpha-Evo V3: 60-second cooldown at end of each full cycle
-                logger.info(f"\n⏸️ Cycle complete. Waiting 60s before next cycle to prevent rate limits...")
-                time.sleep(60)
+                # Aggressive: 20-second cooldown to catch micro-moves
+                logger.info(f"\n⏸️ Cycle complete. Waiting 20s before next cycle to catch micro-moves...")
+                time.sleep(20)
                 
                 # Display log stats and database performance every 10 iterations
                 if iteration % 10 == 0:
