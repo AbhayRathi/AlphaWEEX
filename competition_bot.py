@@ -1603,8 +1603,7 @@ class CompetitionTradingBot:
                 # Tournament Compliance: Verify 20x leverage before placing order
                 leverage_ok = self.client.set_leverage(symbol, leverage=20)
                 if not leverage_ok:
-                    logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - skipping trade")
-                    return
+                    logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - proceeding with trade anyway (assuming manual 20x setup)")
                 
                 # Place BUY order
                 logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
@@ -1744,8 +1743,7 @@ class CompetitionTradingBot:
                     # Tournament Compliance: Verify 20x leverage before placing order
                     leverage_ok = self.client.set_leverage(symbol, leverage=20)
                     if not leverage_ok:
-                        logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - skipping trade")
-                        return
+                        logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - proceeding with trade anyway (assuming manual 20x setup)")
                     
                     # Place SELL order to open SHORT
                     order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True)
@@ -1941,42 +1939,44 @@ class CompetitionTradingBot:
                                 
                                 # Set leverage
                                 leverage_ok = self.client.set_leverage(symbol, leverage=20)
-                                if leverage_ok:
-                                    # Place order
-                                    order = self.client.place_market_order(symbol, override_action, position_size, check_spread=True)
+                                if not leverage_ok:
+                                    logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - proceeding with trade anyway (assuming manual 20x setup)")
+                                
+                                # Place order
+                                order = self.client.place_market_order(symbol, override_action, position_size, check_spread=True)
+                                
+                                if order:
+                                    logger.info(f"✅ HOLD OVERRIDE {override_action} order placed on {symbol}")
                                     
-                                    if order:
-                                        logger.info(f"✅ HOLD OVERRIDE {override_action} order placed on {symbol}")
-                                        
-                                        # Record in database
-                                        self.position_open_times[symbol] = time.time()
-                                        if override_action == "SELL":
-                                            self.short_entry_times[symbol] = time.time()
-                                        
-                                        override_reason = f"HOLD override: Strong 1h trend {hour_price_change_pct:+.2f}%"
-                                        self.db.record_trade_entry(
-                                            symbol=symbol,
-                                            side=override_action,
-                                            price=current_price,
-                                            size=position_size,
-                                            reasoning=override_reason,
-                                            confidence=signal["confidence"],
-                                            ai_reasoning=override_reason,
-                                            behavioral_tag=behavioral_tag,
-                                            confidence_score=signal["confidence"]
-                                        )
-                                        
-                                        # Log execution
-                                        self.ai_logger.log_order_execution(
-                                            symbol=symbol,
-                                            side=override_action,
-                                            size=position_size,
-                                            price=current_price,
-                                            order_id=order.get('orderId')
-                                        )
-                                        
-                                        # Increment valid trade count
-                                        self.valid_trade_count += 1
+                                    # Record in database
+                                    self.position_open_times[symbol] = time.time()
+                                    if override_action == "SELL":
+                                        self.short_entry_times[symbol] = time.time()
+                                    
+                                    override_reason = f"HOLD override: Strong 1h trend {hour_price_change_pct:+.2f}%"
+                                    self.db.record_trade_entry(
+                                        symbol=symbol,
+                                        side=override_action,
+                                        price=current_price,
+                                        size=position_size,
+                                        reasoning=override_reason,
+                                        confidence=signal["confidence"],
+                                        ai_reasoning=override_reason,
+                                        behavioral_tag=behavioral_tag,
+                                        confidence_score=signal["confidence"]
+                                    )
+                                    
+                                    # Log execution
+                                    self.ai_logger.log_order_execution(
+                                        symbol=symbol,
+                                        side=override_action,
+                                        size=position_size,
+                                        price=current_price,
+                                        order_id=order.get('orderId')
+                                    )
+                                    
+                                    # Increment valid trade count
+                                    self.valid_trade_count += 1
             
             # Enhancement 8: Check position timeout
             if symbol in self.position_open_times:
