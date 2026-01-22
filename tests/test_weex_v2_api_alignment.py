@@ -110,7 +110,7 @@ class TestSetLeverage:
         # Verify correct path is used
         call_args = mock_send_request.call_args
         path = call_args[0][1]  # Second positional argument
-        assert path == "/capi/v2/account/position/setLeverage"
+        assert path == "/capi/v2/account/settings"
     
     @patch.object(WEEXv2Client, 'send_weex_request')
     def test_set_leverage_integer_types(self, mock_send_request):

@@ -166,6 +166,7 @@ class WEEXv2Client:
                 "ACCESS-PASSPHRASE": self.api_password,
                 "ACCESS-TIMESTAMP": timestamp,
                 "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "locale": "en-US"
             }
             
@@ -467,20 +468,21 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Try V2 endpoint first, then fallback to V1 if needed.
-            """
-            # Normalize symbol: Weex V2 expects 'cmt_btcusdt' (lowercase, with prefix)
-            symbol = symbol.lower()
-            if "cmt_" not in symbol:
-                 symbol = f"cmt_{symbol}"
+            Uses V2 settings endpoint: /capi/v2/account/settings
             
-            # TRY PATH 1: The most common V2 endpoint
-            path = "/capi/v2/account/setLeverage"
+            Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
+            as required by competition rules.
+            """
+            # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
+            clean_symbol = self.clean_symbol(symbol)
+            
+            # Use the correct V2 endpoint for account settings
+            path = "/capi/v2/account/settings"
             
             body = {
-                "symbol": symbol,
+                "symbol": clean_symbol,
                 "leverage": int(leverage),
-                "marginMode": 2  # 1=Isolated, 2=Cross (Competition rules usually require Cross)
+                "marginMode": 2  # Always use Cross mode (2) as required by competition rules
             }
             
             try:
@@ -492,12 +494,12 @@ class WEEXv2Client:
                         logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
                         return True
                     
-                    # Check if it says "already set"
-                    msg = str(data.get('msg', '')).lower()
+                    # Check if it says "already set" (check both 'msg' and 'message' fields)
+                    msg = str(data.get('msg', data.get('message', ''))).lower()
                     if "already" in msg or "no change" in msg:
                         return True
                         
-                    logger.error(f"❌ Leverage API Error {symbol}: {data}")
+                    logger.warning(f"⚠️ Leverage API response {symbol}: {data}")
                     return False
                 
                 # If 404, try the fallback path (some Weex accounts use V1 logic)
@@ -505,20 +507,23 @@ class WEEXv2Client:
                     logger.warning(f"⚠️ Endpoint {path} not found. Trying fallback path...")
                     return self._set_leverage_fallback(symbol, leverage)
                     
-                logger.error(f"❌ Leverage Status {response.status_code}: {response.text}")
+                logger.warning(f"⚠️ Leverage Status {response.status_code}: {response.text}")
                 return False
                 
             except Exception as e:
-                logger.error(f"❌ Leverage Exception: {str(e)}")
+                logger.warning(f"⚠️ Leverage Exception: {str(e)}")
                 return False
     
     def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
         """Fallback method for setting leverage if the main V2 path fails"""
         try:
+            # Clean symbol for API call
+            clean_symbol = self.clean_symbol(symbol)
+            
             # Fallback Path (V1/Mix style)
             path = "/api/v1/contract/account/set_leverage"
             body = {
-                "symbol": symbol,
+                "symbol": clean_symbol,
                 "leverage": int(leverage),
                 "margin_mode": 2 
             }
