@@ -470,16 +470,14 @@ class WEEXv2Client:
             Sets the leverage for a specific symbol.
             Uses V2 settings endpoint: /capi/v2/account/settings
             """
-            # Normalize symbol: Weex V2 expects 'cmt_btcusdt' (lowercase, with prefix)
-            symbol = symbol.lower()
-            if "cmt_" not in symbol:
-                 symbol = f"cmt_{symbol}"
+            # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
+            clean_symbol = self.clean_symbol(symbol)
             
             # Use the correct V2 endpoint for account settings
             path = "/capi/v2/account/settings"
             
             body = {
-                "symbol": symbol,
+                "symbol": clean_symbol,
                 "leverage": int(leverage),
                 "marginMode": 2  # 1=Isolated, 2=Cross (Competition rules usually require Cross)
             }
@@ -493,8 +491,8 @@ class WEEXv2Client:
                         logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol}")
                         return True
                     
-                    # Check if it says "already set"
-                    msg = str(data.get('msg', '')).lower()
+                    # Check if it says "already set" (check both 'msg' and 'message' fields)
+                    msg = str(data.get('msg', data.get('message', ''))).lower()
                     if "already" in msg or "no change" in msg:
                         return True
                         
@@ -516,10 +514,13 @@ class WEEXv2Client:
     def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
         """Fallback method for setting leverage if the main V2 path fails"""
         try:
+            # Clean symbol for API call
+            clean_symbol = self.clean_symbol(symbol)
+            
             # Fallback Path (V1/Mix style)
             path = "/api/v1/contract/account/set_leverage"
             body = {
-                "symbol": symbol,
+                "symbol": clean_symbol,
                 "leverage": int(leverage),
                 "margin_mode": 2 
             }
