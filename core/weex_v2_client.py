@@ -469,6 +469,9 @@ class WEEXv2Client:
             """
             Sets the leverage for a specific symbol.
             Uses V2 settings endpoint: /capi/v2/account/settings
+            
+            Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
+            as required by competition rules.
             """
             # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
             clean_symbol = self.clean_symbol(symbol)
@@ -479,7 +482,7 @@ class WEEXv2Client:
             body = {
                 "symbol": clean_symbol,
                 "leverage": int(leverage),
-                "marginMode": 2  # 1=Isolated, 2=Cross (Competition rules usually require Cross)
+                "marginMode": 2  # Always use Cross mode (2) as required by competition rules
             }
             
             try:
