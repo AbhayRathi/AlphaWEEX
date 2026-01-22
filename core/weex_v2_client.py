@@ -650,24 +650,56 @@ class WEEXv2Client:
         INITIAL_SL_SHORT_PCT = self.INITIAL_SL_SHORT_PCT
         BREAKEVEN_SL_PCT = self.BREAKEVEN_SL_PCT
         
+        # Alpha-Evo: Trailing stop thresholds
+        BREAKEVEN_THRESHOLD_PCT = 2.0  # Move to breakeven at +2%
+        TRAILING_ACTIVATION_PCT = 4.0  # Activate 1% trailing stop at +4%
+        TRAILING_STOP_PCT = 1.0  # 1% trailing distance
+        
+        # Track highest price for trailing stop
+        if 'highest_price' not in state:
+            state['highest_price'] = entry_price
+        
         # Calculate price change percentage
         price_change_pct = ((current_price - entry_price) / entry_price) * 100
         
         # For LONG positions
         if position_side == "LONG":
-            # Check stop loss
-            if state["breakeven_set"]:
-                # After first partial, SL is at break-even
+            # Update highest price for trailing stop
+            if current_price > state['highest_price']:
+                state['highest_price'] = current_price
+            
+            # Alpha-Evo: Trailing stop logic
+            if price_change_pct >= TRAILING_ACTIVATION_PCT:
+                # Activated 1% trailing stop
+                trailing_sl_price = state['highest_price'] * (1 - TRAILING_STOP_PCT / 100.0)
+                trailing_pct_from_entry = ((trailing_sl_price - entry_price) / entry_price) * 100
+                
+                if current_price <= trailing_sl_price:
+                    logger.warning(f"🛑 Trailing Stop Loss triggered for {symbol}: Price {current_price:.4f} <= Trailing SL {trailing_sl_price:.4f} (Peak: {state['highest_price']:.4f})")
+                    return "SL"
+                    
+                # Log trailing stop status periodically
+                if not state.get('trailing_logged', False):
+                    logger.info(f"📈 Trailing stop active for {symbol}: Peak {state['highest_price']:.4f}, Trail SL {trailing_sl_price:.4f}")
+                    state['trailing_logged'] = True
+                    
+            elif price_change_pct >= BREAKEVEN_THRESHOLD_PCT:
+                # Alpha-Evo: Move to breakeven at +2%
+                if not state.get("breakeven_evo_set", False):
+                    logger.info(f"🎯 Alpha-Evo: Moving stop to breakeven for {symbol} at +{price_change_pct:.2f}%")
+                    state["breakeven_evo_set"] = True
+                
+                # Check breakeven stop
                 if price_change_pct <= BREAKEVEN_SL_PCT:
                     logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {price_change_pct:.2f}%")
                     return "SL"
             else:
-                # Initial stop loss (0.50% for longs)
+                # Initial stop loss (ATR-based, 1.0-2.0%)
                 if price_change_pct <= -INITIAL_SL_LONG_PCT:
                     logger.warning(f"🛑 LONG Stop Loss triggered for {symbol}: {price_change_pct:.2f}% loss (threshold: {INITIAL_SL_LONG_PCT:.2f}%)")
                     return "SL"
             
-            # Check profit targets
+            # Check profit targets (Alpha-Apex partial profit system)
             if not state["reinvested"] and state["partial_taken"] and price_change_pct >= SECOND_TARGET_PCT:
                 logger.info(f"🎯 Alpha-Apex: Second target hit for {symbol}: {price_change_pct:.2f}% (re-investment)")
                 return "PARTIAL_2"
@@ -680,18 +712,45 @@ class WEEXv2Client:
             # Invert price change for shorts
             short_pnl_pct = -price_change_pct
             
-            # Check stop loss
-            if state["breakeven_set"]:
+            # Track lowest price for trailing stop (inverse for shorts)
+            if 'lowest_price' not in state:
+                state['lowest_price'] = entry_price
+            
+            if current_price < state['lowest_price']:
+                state['lowest_price'] = current_price
+            
+            # Alpha-Evo: Trailing stop logic for shorts
+            if short_pnl_pct >= TRAILING_ACTIVATION_PCT:
+                # Activated 1% trailing stop (upward for shorts)
+                trailing_sl_price = state['lowest_price'] * (1 + TRAILING_STOP_PCT / 100.0)
+                trailing_pct_from_entry = -((trailing_sl_price - entry_price) / entry_price) * 100
+                
+                if current_price >= trailing_sl_price:
+                    logger.warning(f"🛑 Trailing Stop Loss triggered for SHORT {symbol}: Price {current_price:.4f} >= Trailing SL {trailing_sl_price:.4f} (Low: {state['lowest_price']:.4f})")
+                    return "SL"
+                    
+                # Log trailing stop status periodically
+                if not state.get('trailing_logged', False):
+                    logger.info(f"📉 Trailing stop active for SHORT {symbol}: Low {state['lowest_price']:.4f}, Trail SL {trailing_sl_price:.4f}")
+                    state['trailing_logged'] = True
+                    
+            elif short_pnl_pct >= BREAKEVEN_THRESHOLD_PCT:
+                # Alpha-Evo: Move to breakeven at +2%
+                if not state.get("breakeven_evo_set", False):
+                    logger.info(f"🎯 Alpha-Evo: Moving stop to breakeven for SHORT {symbol} at +{short_pnl_pct:.2f}%")
+                    state["breakeven_evo_set"] = True
+                
+                # Check breakeven stop
                 if short_pnl_pct <= BREAKEVEN_SL_PCT:
-                    logger.warning(f"🛑 Break-even Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}%")
+                    logger.warning(f"🛑 Break-even Stop Loss triggered for SHORT {symbol}: {short_pnl_pct:.2f}%")
                     return "SL"
             else:
-                # Initial stop loss (0.40% for shorts)
+                # Initial stop loss (ATR-based, tighter for shorts: 0.40%)
                 if short_pnl_pct <= -INITIAL_SL_SHORT_PCT:
                     logger.warning(f"🛑 SHORT Stop Loss triggered for {symbol}: {short_pnl_pct:.2f}% loss (threshold: {INITIAL_SL_SHORT_PCT:.2f}%)")
                     return "SL"
             
-            # Check profit targets
+            # Check profit targets (Alpha-Apex partial profit system)
             if not state["reinvested"] and state["partial_taken"] and short_pnl_pct >= SECOND_TARGET_PCT:
                 logger.info(f"🎯 Alpha-Apex: Second target hit for {symbol}: {short_pnl_pct:.2f}% (re-investment)")
                 return "PARTIAL_2"
@@ -808,3 +867,65 @@ class WEEXv2Client:
             return result
         
         return None
+    
+    def upload_ai_log(self, order_id: str, symbol: str, signal_data: Dict[str, Any], 
+                      indicators: Dict[str, Any], historical_pnl: str) -> bool:
+        """
+        Alpha-Evo: Upload AI log to WEEX after successful order placement
+        
+        Args:
+            order_id: Order ID from placeOrder response
+            symbol: Trading symbol
+            signal_data: Signal information (action, confidence, reasoning, tp, sl)
+            indicators: Market indicators (rsi, ema, current_price, etc.)
+            historical_pnl: Summary of last 5 trades
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            clean_symbol = self.clean_symbol(symbol)
+            path = "/capi/v2/order/uploadAiLog"
+            
+            # Build AI log payload according to WEEX specification
+            payload = {
+                "orderId": order_id,
+                "stage": "Decision Making",
+                "model": "GPT-4o-Alpha-Evo-V2",
+                "input": {
+                    "market_data": {
+                        "symbol": clean_symbol,
+                        "rsi_14": round(indicators.get("rsi", 50.0), 2),
+                        "ema_20": round(indicators.get("ema_20", indicators.get("current_price", 0.0)), 2),
+                        "historical_pnl": historical_pnl
+                    },
+                    "prompt": "Analyze market trend and past performance to execute next trade."
+                },
+                "output": {
+                    "signal": signal_data.get("action", "LONG").upper(),
+                    "confidence": round(signal_data.get("confidence", 0.0), 2),
+                    "tp": round(signal_data.get("tp_price", 0.0), 2),
+                    "sl": round(signal_data.get("sl_price", 0.0), 2)
+                },
+                "explanation": signal_data.get("reasoning", "Market analysis indicates favorable conditions for this trade.")
+            }
+            
+            # Send AI log to WEEX
+            body_json = json.dumps(payload, separators=(',', ':'))
+            response = self.send_weex_request("POST", path, body=body_json)
+            
+            if response and response.status_code == 200:
+                data = response.json()
+                if str(data.get('code')) == '00000':
+                    logger.info(f"✅ AI Log uploaded successfully for order {order_id}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ AI Log upload returned code {data.get('code')}: {data.get('msg')}")
+                    return False
+            else:
+                logger.warning(f"⚠️ AI Log upload failed (HTTP {response.status_code if response else 'No response'})")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to upload AI log: {str(e)}")
+            return False
