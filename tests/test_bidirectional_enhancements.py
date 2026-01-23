@@ -172,7 +172,7 @@ class TestEnhancement3HigherConfidenceShorts:
              patch('competition_bot.API_PASSWORD', 'test'):
             
             bot = CompetitionTradingBot(use_llm=False)
-            bot.client.get_funding_rate = Mock(return_value=0.0)
+            bot.client.get_funding_rate = Mock(return_value={'rate': 0.0, 'sentiment': 'Neutral'})
             
             # Generate signal
             signal = bot.generate_signal(klines, "cmt_btcusdt")

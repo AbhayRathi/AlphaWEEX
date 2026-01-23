@@ -1676,9 +1676,9 @@ class CompetitionTradingBot:
                     
                     # Add funding rate if available
                     try:
-                        funding_rate = self.funding_analyzer.get_funding_rate(symbol)
-                        if funding_rate:
-                            log_inputs["funding_rate"] = funding_rate
+                        funding_info = self.client.get_funding_rate(symbol)
+                        if funding_info:
+                            log_inputs["funding_rate"] = funding_info.get('rate', 0.0)
                     except:
                         pass
                     
@@ -1816,9 +1816,9 @@ class CompetitionTradingBot:
                         
                         # Add funding rate if available
                         try:
-                            funding_rate = self.funding_analyzer.get_funding_rate(symbol)
-                            if funding_rate:
-                                log_inputs["funding_rate"] = funding_rate
+                            funding_info = self.client.get_funding_rate(symbol)
+                            if funding_info:
+                                log_inputs["funding_rate"] = funding_info.get('rate', 0.0)
                         except:
                             pass
                         
