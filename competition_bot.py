@@ -297,7 +297,8 @@ class CompetitionTradingBot:
             equity = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0))
             available = float(balance_data.get('availableBalance', 0) or balance_data.get('available', 0))
             
-            is_frozen = equity > 0 and available == 0
+            # Only consider frozen if BOTH equity AND available are zero
+            is_frozen = equity == 0 and available == 0
             
             if is_frozen:
                 logger.warning(f"⚠️ Frozen balance detected: Equity={equity}, Available={available}")

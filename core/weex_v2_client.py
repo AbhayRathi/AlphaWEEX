@@ -506,7 +506,7 @@ class WEEXv2Client:
                                     self.is_first_balance_check = False
                                 else:
                                     # Use last known positive balance
-                                    logger.warning(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
+                                    logger.info(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
                                     equity = self.last_known_positive_balance
                             # Safety check: if balance < 0, use last known positive balance
                             elif equity < 0:
@@ -551,7 +551,7 @@ class WEEXv2Client:
             }
             
             try:
-                response = self.send_weex_request("POST", path, body=body)
+                response = self.send_weex_request("GET", path, body=body)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -915,7 +915,7 @@ class WEEXv2Client:
             }
             
             body_json = json.dumps(body_dict, separators=(',', ':'))
-            response = self.send_weex_request("POST", path, body=body_json)
+            response = self.send_weex_request("GET", path, body=body_json)
             
             if response and response.status_code == 200:
                 data = response.json()
