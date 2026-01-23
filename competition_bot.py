@@ -581,8 +581,12 @@ class CompetitionTradingBot:
             else:
                 max_equity_24h = self.initial_equity
             
-            # Calculate drawdown from 24h high
-            drawdown_pct = ((current_equity - max_equity_24h) / max_equity_24h) * 100
+            # Calculate drawdown from 24h high with zero division protection
+            try:
+                drawdown_pct = ((current_equity - max_equity_24h) / max_equity_24h) * 100
+            except ZeroDivisionError:
+                logger.warning("⚠️ Division by zero in kill switch calculation, setting drawdown to 0.0% (no drawdown)")
+                drawdown_pct = 0.0  # No drawdown if baseline is 0
             
             # Activate kill switch if drawdown exceeds threshold
             if drawdown_pct < -KILL_SWITCH_PCT:

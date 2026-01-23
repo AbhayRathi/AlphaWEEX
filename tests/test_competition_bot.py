@@ -422,6 +422,80 @@ class TestWEEXv2Client:
                 assert "CMT_" not in body_data['symbol']
                 assert body_data['side'] == "BUY"
                 assert body_data['type'] == "MARKET"
+    
+    def test_get_account_balance_zero_protection(self):
+        """Test that get_account_balance handles zero balance with fallback"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock API response with zero balance
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'collateral': [
+                {
+                    'coin_id': '2',
+                    'totalEquity': '0.0',
+                    'equity': '0.0',
+                    'accountEquity': '0.0'
+                }
+            ]
+        }
+        
+        with patch.object(client, 'send_weex_request', return_value=mock_response):
+            # First call should use emergency startup balance
+            balance = client.get_account_balance()
+            assert balance is not None
+            assert balance['equity'] == client.EMERGENCY_STARTUP_BALANCE
+            assert balance['totalEquity'] == client.EMERGENCY_STARTUP_BALANCE
+    
+    def test_get_account_balance_comprehensive_key_checking(self):
+        """Test that get_account_balance checks all equity keys"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock API response with only accountEquity populated
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'collateral': [
+                {
+                    'coin_id': '2',
+                    'totalEquity': None,
+                    'equity': '0.0',
+                    'accountEquity': '750.5'
+                }
+            ]
+        }
+        
+        with patch.object(client, 'send_weex_request', return_value=mock_response):
+            balance = client.get_account_balance()
+            assert balance is not None
+            assert balance['equity'] == 750.5
+            assert balance['totalEquity'] == 750.5
+    
+    def test_get_account_balance_negative_protection(self):
+        """Test that get_account_balance handles negative balance"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        client.last_known_positive_balance = 500.0
+        
+        # Mock API response with negative balance
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'collateral': [
+                {
+                    'coin_id': '2',
+                    'totalEquity': '-10.5',
+                    'equity': '-10.5',
+                    'accountEquity': '-10.5'
+                }
+            ]
+        }
+        
+        with patch.object(client, 'send_weex_request', return_value=mock_response):
+            balance = client.get_account_balance()
+            assert balance is not None
+            assert balance['equity'] == 500.0  # Should use last known positive balance
+            assert balance['totalEquity'] == 500.0
 
 
 class TestAITradingLogger:
@@ -839,6 +913,44 @@ class TestSafetyEnhancements:
         from competition_bot import CompetitionTradingBot
         
         bot = CompetitionTradingBot(test_mode=True)
+    
+    def test_kill_switch_zero_division_protection(self, mock_env):
+        """Test that check_kill_switch handles zero division gracefully"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Set initial equity to 0 to trigger potential division by zero
+        bot.initial_equity = 0.0
+        
+        # Mock get_current_equity to return a value
+        with patch.object(bot, 'get_current_equity', return_value=100.0):
+            # This should not raise ZeroDivisionError
+            result = bot.check_kill_switch()
+            
+            # Should return False (no kill switch) and not crash
+            assert result is False
+    
+    def test_kill_switch_with_valid_equity(self, mock_env):
+        """Test kill switch with valid equity values"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        bot.initial_equity = 1000.0
+        
+        # Mock get_current_equity to return a value within acceptable range
+        with patch.object(bot, 'get_current_equity', return_value=950.0):
+            # No kill switch should be triggered (only 5% drawdown)
+            result = bot.check_kill_switch()
+            assert result is False
+        
+        # Mock get_current_equity to return a value that triggers kill switch
+        with patch.object(bot, 'get_current_equity', return_value=850.0):
+            with patch.object(bot, 'close_all_positions'):
+                # Kill switch should be triggered (15% drawdown)
+                result = bot.check_kill_switch()
+                assert result is True
+                assert bot.emergency_stop is True
         
         # Create klines with low recent volume
         klines = []

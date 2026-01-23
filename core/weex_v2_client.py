@@ -43,6 +43,10 @@ class WEEXv2Client:
     INITIAL_SL_SHORT_PCT = 0.40  # Initial stop loss for shorts (0.40% - tighter)
     BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
     
+    # Emergency startup balance - used if first balance check returns 0.0
+    # Based on last known good balance from production logs
+    EMERGENCY_STARTUP_BALANCE = 719.0
+    
     def __init__(self, api_key: str, api_secret: str, api_password: str):
         """
         Initialize WEEX v2 Client
@@ -72,6 +76,7 @@ class WEEXv2Client:
         
         # Balance safety tracking: prevent ghost negative values
         self.last_known_positive_balance = 1000.0  # Default starting balance
+        self.is_first_balance_check = True  # Flag to detect first balance check
         
         # Precision settings for different symbols (lowercase keys)
         # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
@@ -473,16 +478,44 @@ class WEEXv2Client:
                     for item in collateral_list:
                         # Ensure we are looking at the USDT wallet (coin_id 2)
                         if str(item.get('coin_id')) == "2":
-                            # Parse totalEquity or accountEquity instead of 'available' balance
-                            equity = float(item.get('totalEquity', 0) or item.get('accountEquity', 0) or item.get('equity', 0))
+                            # Comprehensive equity key checking: try totalEquity, equity, accountEquity
+                            equity = 0.0  # Default to 0.0 if no valid value found
+                            found_value = False  # Track if we found any valid value
+                            for key in ['totalEquity', 'equity', 'accountEquity']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        value = float(item[key])
+                                        if value != 0.0:  # Found a non-zero value, use it
+                                            equity = value
+                                            found_value = True
+                                            break
+                                        elif not found_value:  # First valid value is 0.0, store it but keep looking
+                                            equity = value
+                                            found_value = True
+                                    except (ValueError, TypeError):
+                                        continue
                             
+                            # If no valid non-zero value was found, use fallback
+                            if equity == 0.0:
+                                # Emergency startup balance: if this is the first check and balance is 0
+                                if self.is_first_balance_check:
+                                    # First check returned 0, use emergency startup balance
+                                    logger.warning(f"⚠️ First balance check returned 0.0, using emergency startup balance: ${self.EMERGENCY_STARTUP_BALANCE}")
+                                    equity = self.EMERGENCY_STARTUP_BALANCE
+                                    self.last_known_positive_balance = equity
+                                    self.is_first_balance_check = False
+                                else:
+                                    # Use last known positive balance
+                                    logger.warning(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
+                                    equity = self.last_known_positive_balance
                             # Safety check: if balance < 0, use last known positive balance
-                            if equity < 0:
+                            elif equity < 0:
                                 logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
                                 equity = self.last_known_positive_balance
                             elif equity > 0:
-                                # Update last known positive balance
+                                # Update last known positive balance and mark we've had a successful check
                                 self.last_known_positive_balance = equity
+                                self.is_first_balance_check = False
                             
                             # Add equity to the item for backwards compatibility
                             item['equity'] = equity
