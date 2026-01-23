@@ -70,6 +70,9 @@ class WEEXv2Client:
         # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
         self.session = requests.Session()
         
+        # Balance safety tracking: prevent ghost negative values
+        self.last_known_positive_balance = 1000.0  # Default starting balance
+        
         # Precision settings for different symbols (lowercase keys)
         # Note: Internal symbol keys are lowercase, but API calls convert to uppercase
         self.precision_map = {
@@ -266,7 +269,7 @@ class WEEXv2Client:
     # -------------------------------------------------------------------------
     # CRITICAL FIX 2: Funding Rate (Returns Float, not String)
     # -------------------------------------------------------------------------
-    def get_funding_rate(self, symbol: str) -> float:
+    def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
         # FIX: Ensure symbol is lowercase and starts with 'cmt_'
         symbol = symbol.lower()
         if not symbol.startswith("cmt_"):
@@ -274,6 +277,12 @@ class WEEXv2Client:
 
         """
         Get current funding rate for a symbol from WEEX
+        Returns a dictionary with 'rate' and 'sentiment' fields
+        
+        Sentiment labels:
+        - > 0.03% = 'High/Long-Heavy' (restrict long trades)
+        - < 0.00% = 'Negative/Short-Heavy' (prioritize long trades)
+        - Otherwise = 'Neutral'
         """
         try:
             path = "/capi/v2/market/funding-rate"
@@ -290,14 +299,24 @@ class WEEXv2Client:
                     funding_rate = funding_data.get('fundingRate') or funding_data.get('funding_rate')
                     
                     if funding_rate is not None:
-                        # FIX: Return raw float. 
-                        return float(funding_rate)
+                        rate = float(funding_rate)
+                        
+                        # Classify sentiment based on rate
+                        if rate > 0.03:
+                            sentiment = "High/Long-Heavy"
+                        elif rate < 0.00:
+                            sentiment = "Negative/Short-Heavy"
+                        else:
+                            sentiment = "Neutral"
+                        
+                        return {'rate': rate, 'sentiment': sentiment}
                     
-            return 0.0 # Default fallback
+            # Default fallback
+            return {'rate': 0.0, 'sentiment': 'Neutral'}
             
         except Exception as e:
             logger.warning(f"⚠️ Failed to get funding rate for {symbol}: {str(e)}, using default fallback")
-            return 0.0
+            return {'rate': 0.0, 'sentiment': 'Neutral'}
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 3: Market Price (Fixes "Shadow Mode" / BTC $90k issue)
@@ -454,12 +473,25 @@ class WEEXv2Client:
                     for item in collateral_list:
                         # Ensure we are looking at the USDT wallet (coin_id 2)
                         if str(item.get('coin_id')) == "2":
-                            balance_value = item.get('amount')
-                            logger.info(f"✅ Verified Competition Balance: {balance_value} USDT")
+                            # Parse totalEquity or accountEquity instead of 'available' balance
+                            equity = float(item.get('totalEquity', 0) or item.get('accountEquity', 0) or item.get('equity', 0))
+                            
+                            # Safety check: if balance < 0, use last known positive balance
+                            if equity < 0:
+                                logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
+                                equity = self.last_known_positive_balance
+                            elif equity > 0:
+                                # Update last known positive balance
+                                self.last_known_positive_balance = equity
+                            
+                            # Add equity to the item for backwards compatibility
+                            item['equity'] = equity
+                            item['totalEquity'] = equity
+                            logger.info(f"✅ Verified Competition Equity Balance: {equity} USDT")
                             return item
                     
-                # If no list found, return a safe structure so .get('amount') doesn't crash
-                return {"amount": "0.00"} 
+                # If no list found, return a safe structure
+                return {"equity": self.last_known_positive_balance, "totalEquity": self.last_known_positive_balance} 
             return None
         except Exception as e:
             logger.error(f"Balance parsing error: {str(e)}")

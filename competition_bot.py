@@ -108,6 +108,10 @@ ATR_SL_MAX_PCT = 2.0  # Maximum ATR-based stop loss: 2.0%
 # Alpha-Evo: Trailing Stop Parameters
 TRAILING_BREAKEVEN_PCT = 2.0  # Move SL to breakeven at +2% profit
 TRAILING_ACTIVATION_PCT = 4.0  # Activate 1% trailing stop at +4% profit
+
+# Volume & Liquidity Bypass Settings
+VOLUME_THRESHOLD_MULTIPLIER = 0.05  # Volume threshold for liquidity check (lowered from 0.12)
+VOLUME_BYPASS_LIST = ['cmt_btcusdt', 'cmt_ethusdt', 'cmt_bnbusdt']  # Symbols that bypass volume check
 TRAILING_STOP_DISTANCE_PCT = 1.0  # 1% trailing distance from peak
 
 
@@ -640,17 +644,23 @@ class CompetitionTradingBot:
         for order_id in stale_orders:
             del self.pending_orders[order_id]
     
-    def is_volume_spike(self, klines: List[List], threshold: float = 0.12) -> bool:
+    def is_volume_spike(self, klines: List[List], symbol: str = "", threshold: float = VOLUME_THRESHOLD_MULTIPLIER) -> bool:
         """
         Enhancement 6: Check if recent volume is above average (prevents low-liquidity traps)
         
         Args:
             klines: K-lines data
-            threshold: Volume multiplier threshold (default: 1.5)
+            symbol: Trading symbol (used for bypass check)
+            threshold: Volume multiplier threshold (default: VOLUME_THRESHOLD_MULTIPLIER)
             
         Returns:
             True if volume is acceptable, False if too low
         """
+        # Bypass volume check for specific symbols
+        if symbol.lower() in VOLUME_BYPASS_LIST:
+            logger.info(f"Volume check bypassed for {symbol} (in bypass list)")
+            return True
+        
         if not klines or len(klines) < 2:
             return True  # Default to allowing trade if data insufficient
         
@@ -876,14 +886,18 @@ class CompetitionTradingBot:
             Signal dictionary with action, confidence, and reasoning (adjusted with funding rate)
         """
         # Get account balance (for LLM context)
-        # In a real implementation, fetch this from the API
+        balance_data = self.client.get_account_balance()
         balance = 1000.0  # Default balance
+        if balance_data:
+            balance = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0) or 1000.0)
         
-        # Get funding rate for the symbol
-        funding_rate = self.client.get_funding_rate(symbol)
-        if funding_rate is None:
-            logger.warning(f"⚠️ Could not fetch funding rate for {symbol}, proceeding without funding rate analysis")
-            funding_rate = 0.0  # Default to neutral if unavailable
+        # Get funding rate for the symbol (now returns dict with 'rate' and 'sentiment')
+        funding_info = self.client.get_funding_rate(symbol)
+        funding_rate = funding_info.get('rate', 0.0)
+        funding_sentiment = funding_info.get('sentiment', 'Neutral')
+        
+        # Debug log with equity balance and funding sentiment
+        logger.debug(f"DEBUG: Using Equity Balance: {balance} | Funding Sentiment: {funding_sentiment}")
         
         if self.use_llm and self.strategy_engine:
             # Use LLM-based strategy
@@ -891,14 +905,14 @@ class CompetitionTradingBot:
                 # Get recent performance from database
                 performance = self.db.get_recent_performance(limit=20)
                 
-                # Get LLM decision (it will include funding rate context)
+                # Get LLM decision (pass funding_info dict with rate and sentiment)
                 decision = self.strategy_engine.get_decision(
                     symbol=symbol,
                     klines=klines,
                     performance=performance,
                     balance=balance,
                     leverage=20,
-                    funding_rate=funding_rate
+                    funding_rate=funding_info
                 )
                 
                 # Apply funding rate adjustment to LLM decision
@@ -1593,7 +1607,7 @@ class CompetitionTradingBot:
                     return
                 
                 # Enhancement 6: Check volume spike filter
-                if not self.is_volume_spike(klines):
+                if not self.is_volume_spike(klines, symbol):
                     logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
                     return
                 
@@ -1662,9 +1676,9 @@ class CompetitionTradingBot:
                     
                     # Add funding rate if available
                     try:
-                        funding_rate = self.funding_analyzer.get_funding_rate(symbol)
-                        if funding_rate:
-                            log_inputs["funding_rate"] = funding_rate
+                        funding_info = self.client.get_funding_rate(symbol)
+                        if funding_info:
+                            log_inputs["funding_rate"] = funding_info.get('rate', 0.0)
                     except:
                         pass
                     
@@ -1733,7 +1747,7 @@ class CompetitionTradingBot:
                         return
                     
                     # Check volume spike filter
-                    if not self.is_volume_spike(klines):
+                    if not self.is_volume_spike(klines, symbol):
                         logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
                         return
                     
@@ -1802,9 +1816,9 @@ class CompetitionTradingBot:
                         
                         # Add funding rate if available
                         try:
-                            funding_rate = self.funding_analyzer.get_funding_rate(symbol)
-                            if funding_rate:
-                                log_inputs["funding_rate"] = funding_rate
+                            funding_info = self.client.get_funding_rate(symbol)
+                            if funding_info:
+                                log_inputs["funding_rate"] = funding_info.get('rate', 0.0)
                         except:
                             pass
                         
@@ -1933,7 +1947,7 @@ class CompetitionTradingBot:
                         new_position_pct = EQUITY_SIZING_PCT
                         if current_exposure + new_position_pct <= GLOBAL_MAX_EXPOSURE_PCT:
                             # Check volume spike filter
-                            if self.is_volume_spike(klines):
+                            if self.is_volume_spike(klines, symbol):
                                 # Calculate position size
                                 position_size = self.calculate_position_size(symbol, current_price, side=override_action)
                                 
