@@ -284,10 +284,10 @@ class CompetitionTradingBot:
     def check_frozen_balance(self) -> bool:
         """
         Tournament Compliance: Check for frozen balance at startup
-        (Equity > 0 but Available = 0)
+        (Both Equity = 0 AND Available = 0)
         
         Returns:
-            True if balance is frozen, False otherwise
+            True if balance is frozen (both equity and available are zero), False otherwise
         """
         try:
             balance_data = self.client.get_account_balance()
