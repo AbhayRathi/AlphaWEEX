@@ -480,15 +480,18 @@ class WEEXv2Client:
                         if str(item.get('coin_id')) == "2":
                             # Comprehensive equity key checking: try totalEquity, equity, accountEquity
                             equity = 0.0  # Default to 0.0 if no valid value found
+                            found_value = False  # Track if we found any valid value
                             for key in ['totalEquity', 'equity', 'accountEquity']:
                                 if key in item and item[key] is not None:
                                     try:
                                         value = float(item[key])
                                         if value != 0.0:  # Found a non-zero value, use it
                                             equity = value
+                                            found_value = True
                                             break
-                                        elif equity == 0.0:  # First value is 0.0, store it but keep looking
+                                        elif not found_value:  # First valid value is 0.0, store it but keep looking
                                             equity = value
+                                            found_value = True
                                     except (ValueError, TypeError):
                                         continue
                             
