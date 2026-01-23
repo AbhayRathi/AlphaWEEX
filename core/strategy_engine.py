@@ -371,7 +371,7 @@ Recent Trades:
     def _build_prompt(self, symbol: str, klines: List[List], 
                      performance: Dict[str, Any], balance: float = 1000.0,
                      leverage: int = 20, current_price: float = 0.0,
-                     funding_rate: float = 0.0) -> str:
+                     funding_rate: float = 0.0, funding_sentiment: str = 'Neutral') -> str:
         """
         Build the complete prompt for LLM (Aether-Evo Engine format)
         
@@ -383,6 +383,7 @@ Recent Trades:
             leverage: Trading leverage
             current_price: Current market price
             funding_rate: Current funding rate as percentage
+            funding_sentiment: Funding sentiment label (High/Long-Heavy, Negative/Short-Heavy, Neutral)
             
         Returns:
             Complete prompt string
@@ -425,6 +426,12 @@ DATA:
 
 {funding_analysis}
 
+[Funding Risk Sentiment]: {funding_sentiment}
+- This indicates the current market sentiment based on funding rates
+- High/Long-Heavy: Too many longs, consider avoiding long positions
+- Negative/Short-Heavy: Too many shorts, consider favoring long positions  
+- Neutral: Standard analysis applies
+
 [Past Perf]:
 {trade_history}
 {journal_trades}
@@ -436,8 +443,9 @@ Analyze the data and make a trading decision. Consider:
 3. **Funding Rate Contrarian Strategy** (CRITICAL):
    - If funding > 0.05%: RESTRICT long trades (over-leveraged, crash likely)
    - If funding < -0.05%: PRIORITIZE long trades (short-squeeze likely)
-4. Our trading history (learn from successes and failures)
-5. Risk management with {leverage}x leverage
+4. **Funding Risk Sentiment** (NEW): Use the sentiment label to assess market positioning
+5. Our trading history (learn from successes and failures)
+6. Risk management with {leverage}x leverage
 
 RESPONSE FORMAT (JSON only):
 {{
@@ -631,7 +639,7 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
     
     def get_decision(self, symbol: str, klines: List[List], 
                     performance: Dict[str, Any], balance: float = 1000.0,
-                    leverage: int = 20, funding_rate: float = 0.0) -> Dict[str, Any]:
+                    leverage: int = 20, funding_rate = 0.0) -> Dict[str, Any]:
         """
         Get trading decision from LLM with circuit breaker protection
         
@@ -641,7 +649,7 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             performance: Recent performance metrics from database
             balance: Current balance in USDT
             leverage: Trading leverage
-            funding_rate: Current funding rate as percentage
+            funding_rate: Current funding rate (can be float or dict with 'rate' and 'sentiment')
             
         Returns:
             Dictionary with:
@@ -650,11 +658,19 @@ Be concise. Protect capital. Execute only high-probability setups. RESPECT FUNDI
             - reasoning: Detailed explanation from LLM
         """
         try:
+            # Handle funding_rate as dict or float for backwards compatibility
+            if isinstance(funding_rate, dict):
+                rate_value = funding_rate.get('rate', 0.0)
+                funding_sentiment = funding_rate.get('sentiment', 'Neutral')
+            else:
+                rate_value = float(funding_rate) if funding_rate else 0.0
+                funding_sentiment = 'Neutral'
+            
             # Get current price from klines
             current_price = float(klines[-1][4]) if klines and len(klines) > 0 else 0.0
             
             # Build prompt with funding rate
-            prompt = self._build_prompt(symbol, klines, performance, balance, leverage, current_price, funding_rate)
+            prompt = self._build_prompt(symbol, klines, performance, balance, leverage, current_price, rate_value, funding_sentiment)
             
             # Call LLM with circuit breaker protection
             def _make_llm_call():
