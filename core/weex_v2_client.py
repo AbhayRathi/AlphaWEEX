@@ -495,7 +495,7 @@ class WEEXv2Client:
                                     except (ValueError, TypeError):
                                         continue
                             
-                            # If all keys returned 0.0 or None, use fallback
+                            # If no valid non-zero value was found, use fallback
                             if equity == 0.0:
                                 # Emergency startup balance: if this is the first check and balance is 0
                                 if self.is_first_balance_check:
