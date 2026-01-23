@@ -445,8 +445,8 @@ class TestWEEXv2Client:
             # First call should use emergency startup balance
             balance = client.get_account_balance()
             assert balance is not None
-            assert balance['equity'] == 719.0
-            assert balance['totalEquity'] == 719.0
+            assert balance['equity'] == client.EMERGENCY_STARTUP_BALANCE
+            assert balance['totalEquity'] == client.EMERGENCY_STARTUP_BALANCE
     
     def test_get_account_balance_comprehensive_key_checking(self):
         """Test that get_account_balance checks all equity keys"""
