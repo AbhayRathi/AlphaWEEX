@@ -533,7 +533,7 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Uses V2 settings endpoint: /capi/v2/account/settings
+            Uses V2 settings endpoint: /capi/v2/account/setLeverage
             
             Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
             as required by competition rules.
@@ -542,7 +542,7 @@ class WEEXv2Client:
             clean_symbol = self.clean_symbol(symbol)
             
             # Use the correct V2 endpoint for account settings
-            path = "/capi/v2/account/settings"
+            path = "/capi/v2/account/setLeverage"
             
             body = {
                 "symbol": clean_symbol,
@@ -551,7 +551,7 @@ class WEEXv2Client:
             }
             
             try:
-                response = self.send_weex_request("GET", path, body=body)
+                response = self.send_weex_request("POST", path, body=body)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -915,7 +915,7 @@ class WEEXv2Client:
             }
             
             body_json = json.dumps(body_dict, separators=(',', ':'))
-            response = self.send_weex_request("GET", path, body=body_json)
+            response = self.send_weex_request("POST", path, body=body_json)
             
             if response and response.status_code == 200:
                 data = response.json()
