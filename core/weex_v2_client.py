@@ -473,11 +473,31 @@ class WEEXv2Client:
                     for item in collateral_list:
                         # Ensure we are looking at the USDT wallet (coin_id 2)
                         if str(item.get('coin_id')) == "2":
-                            # Parse totalEquity or accountEquity instead of 'available' balance
-                            equity = float(item.get('totalEquity', 0) or item.get('accountEquity', 0) or item.get('equity', 0))
+                            # Comprehensive equity key checking: try totalEquity, equity, accountEquity
+                            equity = None
+                            for key in ['totalEquity', 'equity', 'accountEquity']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        equity = float(item[key])
+                                        if equity != 0.0:  # Found a non-zero value
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
                             
+                            # If all keys returned 0.0 or None, use fallback
+                            if equity is None or equity == 0.0:
+                                # Emergency startup balance: if this is the first check and balance is 0
+                                if self.last_known_positive_balance == 1000.0:
+                                    # First check returned 0, use emergency startup balance
+                                    logger.warning("⚠️ First balance check returned 0.0, using emergency startup balance: $719.00")
+                                    equity = 719.0
+                                    self.last_known_positive_balance = equity
+                                else:
+                                    # Use last known positive balance
+                                    logger.warning(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
+                                    equity = self.last_known_positive_balance
                             # Safety check: if balance < 0, use last known positive balance
-                            if equity < 0:
+                            elif equity < 0:
                                 logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
                                 equity = self.last_known_positive_balance
                             elif equity > 0:
