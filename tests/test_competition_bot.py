@@ -496,6 +496,60 @@ class TestWEEXv2Client:
             assert balance is not None
             assert balance['equity'] == 500.0  # Should use last known positive balance
             assert balance['totalEquity'] == 500.0
+    
+    def test_frozen_balance_check_both_zero(self):
+        """Test that frozen balance only triggers when BOTH equity AND available are zero"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Mock balance data with both zero - should be frozen
+        mock_balance = {
+            'equity': 0,
+            'totalEquity': 0,
+            'availableBalance': 0,
+            'available': 0
+        }
+        
+        with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
+            is_frozen = bot.check_frozen_balance()
+            assert is_frozen is True, "Should be frozen when both equity and available are zero"
+    
+    def test_frozen_balance_check_equity_positive(self):
+        """Test that frozen balance does NOT trigger when equity > 0 and available = 0"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Mock balance data with equity > 0 but available = 0 (open position scenario)
+        mock_balance = {
+            'equity': 1000.0,
+            'totalEquity': 1000.0,
+            'availableBalance': 0,
+            'available': 0
+        }
+        
+        with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
+            is_frozen = bot.check_frozen_balance()
+            assert is_frozen is False, "Should NOT be frozen when equity > 0 (has open positions)"
+    
+    def test_frozen_balance_check_both_positive(self):
+        """Test that frozen balance does NOT trigger when both equity and available are positive"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Mock balance data with both positive - normal trading scenario
+        mock_balance = {
+            'equity': 1000.0,
+            'totalEquity': 1000.0,
+            'availableBalance': 500.0,
+            'available': 500.0
+        }
+        
+        with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
+            is_frozen = bot.check_frozen_balance()
+            assert is_frozen is False, "Should NOT be frozen when both equity and available are positive"
 
 
 class TestAITradingLogger:

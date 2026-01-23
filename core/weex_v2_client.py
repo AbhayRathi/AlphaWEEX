@@ -506,7 +506,7 @@ class WEEXv2Client:
                                     self.is_first_balance_check = False
                                 else:
                                     # Use last known positive balance
-                                    logger.warning(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
+                                    logger.info(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
                                     equity = self.last_known_positive_balance
                             # Safety check: if balance < 0, use last known positive balance
                             elif equity < 0:
@@ -533,7 +533,7 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Uses V2 settings endpoint: /capi/v2/account/settings
+            Uses V2 settings endpoint: /capi/v2/account/setLeverage
             
             Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
             as required by competition rules.
@@ -542,7 +542,7 @@ class WEEXv2Client:
             clean_symbol = self.clean_symbol(symbol)
             
             # Use the correct V2 endpoint for account settings
-            path = "/capi/v2/account/settings"
+            path = "/capi/v2/account/setLeverage"
             
             body = {
                 "symbol": clean_symbol,
