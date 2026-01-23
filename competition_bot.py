@@ -585,7 +585,7 @@ class CompetitionTradingBot:
             try:
                 drawdown_pct = ((current_equity - max_equity_24h) / max_equity_24h) * 100
             except ZeroDivisionError:
-                logger.warning("⚠️ Division by zero in kill switch calculation, setting drawdown to 100% (no drawdown)")
+                logger.warning("⚠️ Division by zero in kill switch calculation, setting drawdown to 0.0% (no drawdown)")
                 drawdown_pct = 0.0  # No drawdown if baseline is 0
             
             # Activate kill switch if drawdown exceeds threshold

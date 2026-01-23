@@ -474,18 +474,21 @@ class WEEXv2Client:
                         # Ensure we are looking at the USDT wallet (coin_id 2)
                         if str(item.get('coin_id')) == "2":
                             # Comprehensive equity key checking: try totalEquity, equity, accountEquity
-                            equity = None
+                            equity = 0.0  # Default to 0.0 if no valid value found
                             for key in ['totalEquity', 'equity', 'accountEquity']:
                                 if key in item and item[key] is not None:
                                     try:
-                                        equity = float(item[key])
-                                        if equity != 0.0:  # Found a non-zero value
+                                        value = float(item[key])
+                                        if value != 0.0:  # Found a non-zero value, use it
+                                            equity = value
                                             break
+                                        elif equity == 0.0:  # First value is 0.0, store it but keep looking
+                                            equity = value
                                     except (ValueError, TypeError):
                                         continue
                             
                             # If all keys returned 0.0 or None, use fallback
-                            if equity is None or equity == 0.0:
+                            if equity == 0.0:
                                 # Emergency startup balance: if this is the first check and balance is 0
                                 if self.last_known_positive_balance == 1000.0:
                                     # First check returned 0, use emergency startup balance
