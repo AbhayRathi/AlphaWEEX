@@ -299,19 +299,17 @@ class WEEXv2Client:
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
     # -------------------------------------------------------------------------
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List[float]]:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
         """
         Get K-lines (candlestick) data from WEEX
         Endpoint: GET /capi/v2/market/candles
         """
         try:
+            # Clean symbol for API call but preserve granularity param
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             path = "/capi/v2/market/candles"
             
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}&granularity={interval}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -408,15 +406,16 @@ class WEEXv2Client:
     # CRITICAL FIX 3: Market Price (Fixes "Shadow Mode" / BTC $90k issue)
     # -------------------------------------------------------------------------
     def get_market_price(self, symbol: str) -> float:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
+        """
+        Get current market price from WEEX ticker endpoint
+        """
         try:
+            # Clean symbol for API call
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             # We use the ticker endpoint for the latest price
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={symbol}"
+            query_params = f"?symbol={clean_symbol_value}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -468,17 +467,15 @@ class WEEXv2Client:
             return None
     
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
         """
         Get ticker (24h stats) from WEEX
         """
         try:
+            # Clean symbol for API call
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -672,7 +669,8 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Uses V2 settings endpoint: /capi/v2/account/setLeverage
+            Uses V2 settings endpoint: /capi/v2/account/settings
+            Falls back to /capi/v2/account/setLeverage on 404
             
             Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
             as required by competition rules.
@@ -680,8 +678,8 @@ class WEEXv2Client:
             # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
             clean_symbol = self.clean_symbol(symbol)
             
-            # Use the correct V2 endpoint for account settings
-            path = "/capi/v2/account/setLeverage"
+            # Primary endpoint: /capi/v2/account/settings
+            path = "/capi/v2/account/settings"
             
             body = {
                 "symbol": clean_symbol,
@@ -706,9 +704,9 @@ class WEEXv2Client:
                     logger.warning(f"⚠️ Leverage API response {symbol}: {data}")
                     return False
                 
-                # If 404, try the fallback path (some Weex accounts use V1 logic)
+                # If 404, try the fallback path /capi/v2/account/setLeverage
                 if response.status_code == 404:
-                    logger.warning(f"⚠️ Endpoint {path} not found. Trying fallback path...")
+                    logger.warning(f"⚠️ Endpoint {path} not found (404). Trying fallback path /capi/v2/account/setLeverage...")
                     return self._set_leverage_fallback(symbol, leverage)
                     
                 logger.warning(f"⚠️ Leverage Status {response.status_code}: {response.text}")
@@ -719,29 +717,41 @@ class WEEXv2Client:
                 return False
     
     def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
-        """Fallback method for setting leverage if the main V2 path fails"""
+        """
+        Fallback leverage setter using /capi/v2/account/setLeverage endpoint
+        """
         try:
-            # Clean symbol for API call
             clean_symbol = self.clean_symbol(symbol)
+            path = "/capi/v2/account/setLeverage"
             
-            # Fallback Path (V1/Mix style)
-            path = "/api/v1/contract/account/set_leverage"
             body = {
                 "symbol": clean_symbol,
                 "leverage": int(leverage),
-                "margin_mode": 2 
+                "marginMode": 2
             }
+            
             response = self.send_weex_request("POST", path, body=body)
-                
+            
             if response.status_code == 200:
                 data = response.json()
-                if data.get('success') or data.get('code') == '00000':
-                    logger.info(f"✅ Leverage (Fallback) confirmed at {leverage}x for {symbol}")
+                if data.get('code') == '00000' or data.get('success') is True:
+                    logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol} (fallback)")
                     return True
+                
+                msg = str(data.get('msg', data.get('message', ''))).lower()
+                if "already" in msg or "no change" in msg:
+                    return True
+                    
+                logger.warning(f"⚠️ Fallback leverage response: {data}")
+                return False
+            
+            logger.warning(f"⚠️ Fallback leverage failed: {response.status_code}")
             return False
-        except:
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Fallback leverage exception: {str(e)}")
             return False
-        
+    
     def has_open_position(self, symbol: str) -> bool:
         # 1. Clean symbol first
         symbol = symbol.replace('cmt_', '').upper()
@@ -806,17 +816,21 @@ class WEEXv2Client:
         Returns:
             Order response dict or None
         """
-        symbol = symbol.lower()
+        # Store original symbol for internal tracking
+        symbol_internal = symbol.lower()
         
         # AI Wars: Prevent opening new position if active position/order exists
-        if side in ["BUY", "SELL"] and symbol in self.active_symbols:
+        if side in ["BUY", "SELL"] and symbol_internal in self.active_symbols:
             logger.warning(f"🚫 AI Wars: Cannot open new position on {symbol} - active position/order already exists")
             return None
         
         try:
             # AI Wars Audit: Use step size rounding for exchange compliance
-            size = self.round_step_size(symbol, size)
+            size = self.round_step_size(symbol_internal, size)
             client_oid = str(uuid.uuid4()).replace("-", "")[:30]
+            
+            # Clean symbol for API call: BTCUSDT format (no cmt_ prefix, uppercase)
+            clean_symbol_value = self.clean_symbol(symbol)
             
             side_map = {
                 "BUY": "1", "SELL": "2",
@@ -825,7 +839,7 @@ class WEEXv2Client:
             
             path = "/capi/v2/order/placeOrder"
             body_dict = {
-                "symbol": symbol,
+                "symbol": clean_symbol_value,
                 "client_oid": client_oid,
                 "side": side_map.get(side.upper(), "1"),
                 "type": "1",         # Market Order
@@ -873,11 +887,11 @@ class WEEXv2Client:
                     order_id = data.get('order_id') or data.get('orderId')
                     logger.info(f"✅ Success! ID: {order_id}")
                     
-                    # AI Wars: Track active order and symbol
+                    # AI Wars: Track active order and symbol (use internal symbol format)
                     if side in ["BUY", "SELL"]:
                         if order_id:
-                            self.active_order_ids[symbol] = order_id
-                        self.active_symbols.add(symbol)
+                            self.active_order_ids[symbol_internal] = order_id
+                        self.active_symbols.add(symbol_internal)
                         
                         # AI Wars Audit: Save state to file for persistence
                         self._save_state_to_file()

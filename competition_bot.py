@@ -564,9 +564,17 @@ class CompetitionTradingBot:
                         total_exposure += notional_value
             
             balance = self.client.get_account_balance()
-            if balance and 'availableBalance' in balance:
-                total_equity = float(balance['availableBalance'])
-                return (total_exposure / total_equity) * 100 if total_equity > 0 else 0.0
+            if balance:
+                # Use equity (totalEquity preferred, fallback to equity) as denominator
+                total_equity = float(balance.get('totalEquity', 0) or balance.get('equity', 0) or 0)
+                
+                # Guard division by zero
+                if total_equity > 0:
+                    return (total_exposure / total_equity) * 100
+                else:
+                    logger.warning("⚠️ Total equity is zero, cannot calculate exposure")
+                    return 0.0
+            
             return 0.0
         except Exception as e:
             logger.error(f"Failed to calculate total exposure: {str(e)}")
