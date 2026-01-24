@@ -4,6 +4,7 @@ Tests for precise accounting, fixed-fractional sizing, TP/SL, and multi-trade tr
 """
 import pytest
 import time
+import os
 from unittest.mock import Mock, patch, MagicMock
 from core.weex_v2_client import WEEXv2Client
 from competition_bot import CompetitionTradingBot, RISK_PERCENT
@@ -125,6 +126,10 @@ class TestTPSLParameters:
     
     def test_tp_sl_in_body_payload(self):
         """Test that TP/SL are included in order payload"""
+        # Clean up any existing session.json
+        if os.path.exists("session.json"):
+            os.remove("session.json")
+        
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Track the request body
@@ -140,18 +145,21 @@ class TestTPSLParameters:
             return mock_response
         
         with patch.object(client, 'send_weex_request', side_effect=capture_body):
-            client.place_market_order(
-                symbol="cmt_btcusdt",
-                side="BUY",
-                size=0.001,
-                check_spread=False,
-                stop_loss_price=49000.0,
-                take_profit_price=51000.0
-            )
+            with patch.object(client, '_save_state_to_file'):  # Mock state saving
+                client.place_market_order(
+                    symbol="cmt_btcusdt",
+                    side="BUY",
+                    size=0.001,
+                    check_spread=False,
+                    stop_loss_price=49000.0,
+                    take_profit_price=51000.0
+                )
             
             # Verify TP/SL are in payload
             assert 'stopLossTriggerPrice' in captured_body
             assert 'takeProfitTriggerPrice' in captured_body
+            assert 'stopLossReduceOnly' in captured_body
+            assert 'takeProfitReduceOnly' in captured_body
             assert captured_body['stopLossTriggerPrice'] == '49000.0'
             assert captured_body['takeProfitTriggerPrice'] == '51000.0'
 
@@ -161,6 +169,10 @@ class TestMultiTradeTracking:
     
     def test_active_symbols_tracking(self):
         """Test that active symbols are tracked"""
+        # Clean up any existing session.json
+        if os.path.exists("session.json"):
+            os.remove("session.json")
+        
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Initially empty
@@ -169,6 +181,10 @@ class TestMultiTradeTracking:
     
     def test_duplicate_position_prevention(self):
         """Test that duplicate positions are prevented"""
+        # Clean up any existing session.json
+        if os.path.exists("session.json"):
+            os.remove("session.json")
+        
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Add symbol to active tracking
@@ -264,6 +280,10 @@ class TestPayloadIntegrity:
     
     def test_numerical_string_conversion(self):
         """Test that numerical values are converted to strings"""
+        # Clean up any existing session.json
+        if os.path.exists("session.json"):
+            os.remove("session.json")
+        
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock to capture the body
@@ -279,12 +299,13 @@ class TestPayloadIntegrity:
             return mock_response
         
         with patch.object(client, 'send_weex_request', side_effect=capture_body):
-            client.place_market_order(
-                symbol="cmt_btcusdt",
-                side="BUY",
-                size=0.001,
-                check_spread=False
-            )
+            with patch.object(client, '_save_state_to_file'):  # Mock state saving
+                client.place_market_order(
+                    symbol="cmt_btcusdt",
+                    side="BUY",
+                    size=0.001,
+                    check_spread=False
+                )
             
             # Verify size is a string
             assert 'size' in captured_body

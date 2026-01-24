@@ -103,6 +103,59 @@ class WEEXv2Client:
             "cmt_ltcusdt": 2,   # LTC: 2 decimals
             "ltcusdt": 2,       # LTC: 2 decimals (clean format)
         }
+        
+        # AI Wars Audit: Step size compliance (hardcoded constants per exchange specs)
+        self.step_size_map = {
+            "cmt_btcusdt": 0.01,   # BTC: 0.01 step size
+            "btcusdt": 0.01,
+            "cmt_ethusdt": 0.1,    # ETH: 0.1 step size
+            "ethusdt": 0.1,
+            "cmt_solusdt": 0.1,    # SOL: 0.1 step size
+            "solusdt": 0.1,
+            "cmt_adausdt": 1.0,    # ADA: 1.0 step size
+            "adausdt": 1.0,
+            "cmt_dogeusdt": 1.0,   # DOGE: 1.0 step size
+            "dogeusdt": 1.0,
+            "cmt_xrpusdt": 1.0,    # XRP: 1.0 step size
+            "xrpusdt": 1.0,
+            "cmt_bnbusdt": 0.1,    # BNB: 0.1 step size
+            "bnbusdt": 0.1,
+            "cmt_ltcusdt": 0.1,    # LTC: 0.1 step size
+            "ltcusdt": 0.1,
+        }
+        
+        # AI Wars Audit: Load persisted state if exists
+        self._load_state_from_file()
+    
+    def _load_state_from_file(self) -> None:
+        """
+        AI Wars Audit: Load persisted state from session.json
+        Ensures script restart remembers open positions
+        """
+        try:
+            if os.path.exists("session.json"):
+                with open("session.json", "r") as f:
+                    state = json.load(f)
+                    self.active_symbols = set(state.get("active_symbols", []))
+                    self.active_order_ids = state.get("active_order_ids", {})
+                    logger.info(f"✅ Loaded persisted state: {len(self.active_symbols)} active symbols")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load state from session.json: {str(e)}")
+    
+    def _save_state_to_file(self) -> None:
+        """
+        AI Wars Audit: Save current state to session.json
+        """
+        try:
+            state = {
+                "active_symbols": list(self.active_symbols),
+                "active_order_ids": self.active_order_ids,
+                "timestamp": time.time()
+            }
+            with open("session.json", "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state to session.json: {str(e)}")
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
@@ -125,6 +178,24 @@ class WEEXv2Client:
                 # logger.warning(f"⚠️ Precision not defined for {symbol}, using default 2 decimals")
                 precision = 2
         return round(qty, precision)
+    
+    def round_step_size(self, symbol: str, qty: float) -> float:
+        """
+        AI Wars Audit: Round quantity to exchange step size compliance
+        Uses hardcoded step sizes: 0.01 for BTC, 0.1 for ETH, etc.
+        """
+        if not symbol:
+            logger.warning(f"⚠️ Invalid symbol: {symbol}, using default step size 0.01")
+            step_size = 0.01
+        else:
+            step_size = self.step_size_map.get(symbol.lower(), 0.01)
+        
+        # Round to nearest step size
+        rounded = round(qty / step_size) * step_size
+        
+        # Also apply precision rounding for display
+        precision = self.precision_map.get(symbol.lower(), 2)
+        return round(rounded, precision)
     
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                            query_string: str, body_str: str) -> str:
@@ -544,6 +615,11 @@ class WEEXv2Client:
                             
                             # AI Wars: Log both Equity and Available
                             logger.info(f"[LOG] Equity: ${equity:.2f} | Available: ${available:.2f}")
+                            
+                            # AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
+                            item['availableBalance'] = available
+                            item['liquidCapital'] = self._calculate_liquid_capital(available)
+                            
                             return item
                     
                 # If no list found, return a safe structure
@@ -552,6 +628,46 @@ class WEEXv2Client:
         except Exception as e:
             logger.error(f"Balance parsing error: {str(e)}")
             return None
+    
+    def _calculate_liquid_capital(self, available: float) -> float:
+        """
+        AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
+        of all active trades from available balance
+        
+        Args:
+            available: Available balance from exchange
+            
+        Returns:
+            Liquid capital available for new trades
+        """
+        try:
+            # Query all open positions to get their initial margin
+            path = "/capi/v2/positions/pending-orders?productType=umcbl"
+            response = self.send_weex_request("GET", path)
+            
+            if response and response.status_code == 200:
+                data = response.json()
+                positions = data.get('data', {}).get('positions', [])
+                
+                total_initial_margin = 0.0
+                for pos in positions:
+                    try:
+                        # Extract initial margin for each active position
+                        initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 0)
+                        total_initial_margin += initial_margin
+                    except (ValueError, TypeError):
+                        continue
+                
+                liquid = available - total_initial_margin
+                logger.info(f"💧 Liquid Capital: ${liquid:.2f} (Available: ${available:.2f} - Initial Margin: ${total_initial_margin:.2f})")
+                return max(0.0, liquid)  # Never return negative
+            
+            # If API call fails, return available as-is
+            return available
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to calculate liquid capital: {str(e)}, using available balance")
+            return available
         
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
@@ -698,8 +814,8 @@ class WEEXv2Client:
             return None
         
         try:
-            # ... (Spread guard and round_qty logic stays the same) ...
-            size = self.round_qty(symbol, size)
+            # AI Wars Audit: Use step size rounding for exchange compliance
+            size = self.round_step_size(symbol, size)
             client_oid = str(uuid.uuid4()).replace("-", "")[:30]
             
             side_map = {
@@ -718,12 +834,14 @@ class WEEXv2Client:
                 "match_price": "1"
             }
             
-            # AI Wars: Add exchange-side TP/SL parameters if provided
+            # AI Wars Audit: Add exchange-side TP/SL parameters with reduceOnly flag
             if stop_loss_price is not None:
                 body_dict["stopLossTriggerPrice"] = str(float(stop_loss_price))
+                body_dict["stopLossReduceOnly"] = "true"  # Prevent accidental new position opening
             
             if take_profit_price is not None:
                 body_dict["takeProfitTriggerPrice"] = str(float(take_profit_price))
+                body_dict["takeProfitReduceOnly"] = "true"  # Prevent accidental new position opening
             
             # AI Wars: Convert dict to COMPACT string with all numerical values as strings
             # This ensures the signature matches exactly what the server sees and avoids scientific notation.
@@ -760,6 +878,9 @@ class WEEXv2Client:
                         if order_id:
                             self.active_order_ids[symbol] = order_id
                         self.active_symbols.add(symbol)
+                        
+                        # AI Wars Audit: Save state to file for persistence
+                        self._save_state_to_file()
                     
                     return data
             return None
@@ -943,6 +1064,9 @@ class WEEXv2Client:
             self.active_symbols.discard(symbol_lower)
             if symbol_lower in self.active_order_ids:
                 del self.active_order_ids[symbol_lower]
+            
+            # AI Wars Audit: Save state after closing position
+            self._save_state_to_file()
             
             return True
         else:
@@ -1174,8 +1298,44 @@ class WEEXv2Client:
             # Format active trades list
             active_trades_str = ', '.join([s.upper().replace('CMT_', '') for s in active_trades]) if active_trades else 'None'
             
+            # Get equity and available balance for CSV logging
+            equity = 0.0
+            available = 0.0
+            try:
+                balance_data = self.get_account_balance()
+                if balance_data:
+                    equity = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0) or 0)
+                    available = float(balance_data.get('availableBalance', 0) or balance_data.get('available', 0) or 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to fetch balance for heartbeat: {str(e)}")
+            
             # AI Wars: Heartbeat log format
             logger.info(f"💓 Heartbeat | Active Trades: [{active_trades_str}] | Total Unrealized PnL: {total_unrealized_pnl:+.2f} USDT")
+            
+            # AI Wars Audit: Append to performance.csv for monitoring
+            try:
+                import csv
+                from datetime import datetime
+                
+                csv_exists = os.path.exists("performance.csv")
+                with open("performance.csv", "a", newline='') as csvfile:
+                    fieldnames = ['timestamp', 'equity', 'available', 'unrealized_pnl', 'active_trades_count']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    # Write header if file is new
+                    if not csv_exists:
+                        writer.writeheader()
+                    
+                    # Write performance row
+                    writer.writerow({
+                        'timestamp': datetime.now().isoformat(),
+                        'equity': f"{equity:.2f}",
+                        'available': f"{available:.2f}",
+                        'unrealized_pnl': f"{total_unrealized_pnl:+.2f}",
+                        'active_trades_count': len(active_trades)
+                    })
+            except Exception as e:
+                logger.error(f"Failed to write to performance.csv: {str(e)}")
             
         except Exception as e:
             logger.error(f"Failed to log heartbeat: {str(e)}")
