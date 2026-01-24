@@ -216,7 +216,7 @@ class TestMultiTradeTracking:
             assert client.last_heartbeat_time > time.time() - 10
 
 
-class TestAntiFIrewall:
+class TestAntiFirewall:
     """Test anti-firewall logic"""
     
     def test_delay_between_api_calls(self):

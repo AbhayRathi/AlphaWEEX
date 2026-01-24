@@ -690,9 +690,6 @@ class WEEXv2Client:
         Returns:
             Order response dict or None
         """
-        # AI Wars: Add 1.5s delay before API calls to avoid firewall
-        time.sleep(1.5)
-        
         symbol = symbol.lower()
         
         # AI Wars: Prevent opening new position if active position/order exists
@@ -733,14 +730,8 @@ class WEEXv2Client:
             body_json = json.dumps(body_dict, separators=(',', ':'))
             
             # Pass the STRING body, not the dict, to your request sender
+            # Note: send_weex_request already handles delays and firewall errors (403/521)
             response = self.send_weex_request("POST", path, body=body_json)
-            
-            # AI Wars: Handle 403/521 firewall errors
-            if response and response.status_code in [403, 521]:
-                logger.warning(f"🔥 Firewall error {response.status_code} detected, pausing for 60 seconds...")
-                time.sleep(60)
-                # Retry once after pause
-                response = self.send_weex_request("POST", path, body=body_json)
             
             # ... (Rest of your response handling) ...
             if response and response.status_code == 200:
