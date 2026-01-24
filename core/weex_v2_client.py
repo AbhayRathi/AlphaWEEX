@@ -67,6 +67,11 @@ class WEEXv2Client:
         # Track open positions for TP/SL management
         self.open_positions: Dict[str, Dict[str, Any]] = {}
         
+        # AI Wars: Multi-trade state tracking
+        self.active_order_ids: Dict[str, str] = {}  # {symbol: order_id}
+        self.active_symbols: set = set()  # Set of symbols with active positions/orders
+        self.last_heartbeat_time = 0  # Track last heartbeat log time
+        
         # Alpha-Apex: Track position scaling state
         # {symbol: {"partial_taken": bool, "breakeven_set": bool, "reinvested": bool, "original_size": float}}
         self.position_scaling_state: Dict[str, Dict[str, Any]] = {}
@@ -141,7 +146,11 @@ class WEEXv2Client:
         Send authenticated request to WEEX API using compact JSON for signatures.
         
         Alpha-Evo V3: Implements Exponential Backoff for 521 errors
+        AI Wars: Adds 1.5s delay between all API calls to avoid firewall
         """
+        # AI Wars: Add delay to avoid triggering firewall
+        time.sleep(1.5)
+        
         # Alpha-Evo V3: Exponential Backoff for 521 errors
         max_retries = 3
         base_backoff = 60  # Start at 60 seconds
@@ -187,10 +196,11 @@ class WEEXv2Client:
                     # Send the EXACT body_str used for the signature
                     response = self.session.post(url, headers=headers, data=body_str, timeout=30)
                 
-                if response.status_code == 521:
+                # AI Wars: Handle both 521 and 403 firewall errors
+                if response.status_code in [521, 403]:
                     # Alpha-Evo V3: Exponential Backoff
                     backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    logger.error(f"🔥 521 Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
+                    logger.error(f"🔥 {response.status_code} Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
                     self.last_521_error_time = time.time()
                     self.cooldown_seconds = backoff_time
                     
@@ -198,17 +208,17 @@ class WEEXv2Client:
                         time.sleep(backoff_time)
                         continue  # Retry
                     else:
-                        raise Exception(f"521 Firewall Error - Max retries ({max_retries}) exceeded")
+                        raise Exception(f"{response.status_code} Firewall Error - Max retries ({max_retries}) exceeded")
                     
                 # Success - reset cooldown to base
                 self.cooldown_seconds = 60
                 return response
                 
             except Exception as e:
-                if "521" not in str(e) or retry >= max_retries - 1:
+                if ("521" not in str(e) and "403" not in str(e)) or retry >= max_retries - 1:
                     logger.error(f"❌ Request failed: {str(e)}")
                     raise
-                # For 521 errors, continue to retry
+                # For firewall errors, continue to retry
                 continue
         
         # Defensive fallback - should not reach here due to retry loop logic
@@ -520,7 +530,20 @@ class WEEXv2Client:
                             # Add equity to the item for backwards compatibility
                             item['equity'] = equity
                             item['totalEquity'] = equity
-                            logger.info(f"✅ Verified Competition Equity Balance: {equity} USDT")
+                            
+                            # AI Wars: Extract available balance for precise logging
+                            available = 0.0
+                            for key in ['availableBalance', 'available', 'availableFunds']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        available = float(item[key])
+                                        if available != 0.0:
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # AI Wars: Log both Equity and Available
+                            logger.info(f"[LOG] Equity: ${equity:.2f} | Available: ${available:.2f}")
                             return item
                     
                 # If no list found, return a safe structure
@@ -650,8 +673,32 @@ class WEEXv2Client:
             return False
     
     def place_market_order(self, symbol: str, side: str, size: float,
-                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
+                           check_spread: bool = True, 
+                           stop_loss_price: Optional[float] = None,
+                           take_profit_price: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """
+        Place a market order with optional TP/SL parameters
+        
+        Args:
+            symbol: Trading symbol
+            side: Order side (BUY, SELL, CLOSE_LONG, CLOSE_SHORT)
+            size: Order size
+            check_spread: Whether to check spread before placing order
+            stop_loss_price: Optional stop loss trigger price for exchange-side safety
+            take_profit_price: Optional take profit trigger price for exchange-side safety
+        
+        Returns:
+            Order response dict or None
+        """
+        # AI Wars: Add 1.5s delay before API calls to avoid firewall
+        time.sleep(1.5)
+        
         symbol = symbol.lower()
+        
+        # AI Wars: Prevent opening new position if active position/order exists
+        if side in ["BUY", "SELL"] and symbol in self.active_symbols:
+            logger.warning(f"🚫 AI Wars: Cannot open new position on {symbol} - active position/order already exists")
+            return None
         
         try:
             # ... (Spread guard and round_qty logic stays the same) ...
@@ -670,16 +717,30 @@ class WEEXv2Client:
                 "side": side_map.get(side.upper(), "1"),
                 "type": "1",         # Market Order
                 "order_type": "0",
-                "size": str(size),
+                "size": str(float(size)),  # AI Wars: Ensure string conversion via float to avoid scientific notation
                 "match_price": "1"
             }
             
-            # CRITICAL FIX: Convert dict to a COMPACT string (no spaces)
-            # This ensures the signature matches exactly what the server sees.
+            # AI Wars: Add exchange-side TP/SL parameters if provided
+            if stop_loss_price is not None:
+                body_dict["stopLossTriggerPrice"] = str(float(stop_loss_price))
+            
+            if take_profit_price is not None:
+                body_dict["takeProfitTriggerPrice"] = str(float(take_profit_price))
+            
+            # AI Wars: Convert dict to COMPACT string with all numerical values as strings
+            # This ensures the signature matches exactly what the server sees and avoids scientific notation.
             body_json = json.dumps(body_dict, separators=(',', ':'))
             
             # Pass the STRING body, not the dict, to your request sender
             response = self.send_weex_request("POST", path, body=body_json)
+            
+            # AI Wars: Handle 403/521 firewall errors
+            if response and response.status_code in [403, 521]:
+                logger.warning(f"🔥 Firewall error {response.status_code} detected, pausing for 60 seconds...")
+                time.sleep(60)
+                # Retry once after pause
+                response = self.send_weex_request("POST", path, body=body_json)
             
             # ... (Rest of your response handling) ...
             if response and response.status_code == 200:
@@ -700,7 +761,15 @@ class WEEXv2Client:
                 
                 # Note: Success usually returns the order_id directly as we saw in the test
                 if data.get('order_id') or error_code == ERROR_CODE_SUCCESS:
-                    logger.info(f"✅ Success! ID: {data.get('order_id')}")
+                    order_id = data.get('order_id') or data.get('orderId')
+                    logger.info(f"✅ Success! ID: {order_id}")
+                    
+                    # AI Wars: Track active order and symbol
+                    if side in ["BUY", "SELL"]:
+                        if order_id:
+                            self.active_order_ids[symbol] = order_id
+                        self.active_symbols.add(symbol)
+                    
                     return data
             return None
 
@@ -874,6 +943,16 @@ class WEEXv2Client:
             # Clean up scaling state
             if symbol in self.position_scaling_state:
                 del self.position_scaling_state[symbol]
+            
+            # AI Wars: Remove from active tracking
+            symbol_lower = symbol.lower()
+            if not symbol_lower.startswith('cmt_'):
+                symbol_lower = f'cmt_{symbol_lower}'
+            
+            self.active_symbols.discard(symbol_lower)
+            if symbol_lower in self.active_order_ids:
+                del self.active_order_ids[symbol_lower]
+            
             return True
         else:
             logger.error(f"❌ Failed to close position for {symbol}")
@@ -1061,3 +1140,51 @@ class WEEXv2Client:
             
         except Exception as e:
             logger.error(f"Failed to save failed log: {str(e)}")
+    
+    def log_heartbeat(self) -> None:
+        """
+        AI Wars: Log heartbeat every 10 minutes showing active trades and unrealized PnL
+        """
+        current_time = time.time()
+        
+        # Only log heartbeat every 10 minutes (600 seconds)
+        if current_time - self.last_heartbeat_time < 600:
+            return
+        
+        self.last_heartbeat_time = current_time
+        
+        try:
+            # Get active symbols from open positions
+            active_trades = list(self.active_symbols)
+            
+            # Calculate total unrealized PnL
+            total_unrealized_pnl = 0.0
+            
+            for symbol in active_trades:
+                if symbol in self.open_positions:
+                    position = self.open_positions[symbol]
+                    # Get current price
+                    klines = self.get_market_klines(symbol, interval='1m', limit=1)
+                    if klines and len(klines) > 0:
+                        current_price = float(klines[-1][4])
+                        entry_price = float(position.get('entryPrice', 0))
+                        size = float(position.get('size', 0))
+                        side = position.get('side', '').upper()
+                        
+                        if entry_price > 0:
+                            # Calculate unrealized PnL
+                            if side == "LONG":
+                                pnl = (current_price - entry_price) * abs(size)
+                            else:  # SHORT
+                                pnl = (entry_price - current_price) * abs(size)
+                            
+                            total_unrealized_pnl += pnl
+            
+            # Format active trades list
+            active_trades_str = ', '.join([s.upper().replace('CMT_', '') for s in active_trades]) if active_trades else 'None'
+            
+            # AI Wars: Heartbeat log format
+            logger.info(f"💓 Heartbeat | Active Trades: [{active_trades_str}] | Total Unrealized PnL: {total_unrealized_pnl:+.2f} USDT")
+            
+        except Exception as e:
+            logger.error(f"Failed to log heartbeat: {str(e)}")
