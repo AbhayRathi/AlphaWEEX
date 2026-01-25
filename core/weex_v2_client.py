@@ -1280,8 +1280,6 @@ class WEEXv2Client:
         if current_time - self.last_heartbeat_time < 600:
             return
         
-        self.last_heartbeat_time = current_time
-        
         try:
             # Get active symbols from open positions
             active_trades = list(self.active_symbols)
@@ -1353,3 +1351,6 @@ class WEEXv2Client:
             
         except Exception as e:
             logger.error(f"Failed to log heartbeat: {str(e)}")
+        finally:
+            # Update timestamp to reflect actual completion time
+            self.last_heartbeat_time = time.time()
