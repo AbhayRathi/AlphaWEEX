@@ -599,6 +599,7 @@ class WEEXv2Client:
                             if equity < 0:
                                 logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
                                 equity = self.last_known_positive_balance
+                                # Don't update last_known_positive_balance since this is a fallback
                             elif equity > 0:
                                 # Update last known positive balance and mark we've had a successful check
                                 self.last_known_positive_balance = equity
@@ -644,9 +645,18 @@ class WEEXv2Client:
                     
             return None
         except Exception as e:
-            # Check if this is a 521/403 error that escaped send_weex_request
-            if ("521" in str(e) or "403" in str(e) or "Firewall" in str(e)) and retry_count < max_retries:
-                logger.warning(f"🛑 Firewall error detected. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+            # Check if this is a 521/403 firewall error that escaped send_weex_request
+            # These specific error patterns are raised by send_weex_request
+            error_msg = str(e).lower()
+            is_firewall_error = (
+                "521" in error_msg or 
+                "403" in error_msg or 
+                "firewall" in error_msg or
+                "cloudflare" in error_msg
+            )
+            
+            if is_firewall_error and retry_count < max_retries:
+                logger.warning(f"🛑 Firewall error detected: {str(e)}. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
                 time.sleep(60)
                 return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
             
