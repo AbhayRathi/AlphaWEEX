@@ -67,6 +67,11 @@ class WEEXv2Client:
         # Track open positions for TP/SL management
         self.open_positions: Dict[str, Dict[str, Any]] = {}
         
+        # AI Wars: Multi-trade state tracking
+        self.active_order_ids: Dict[str, str] = {}  # {symbol: order_id}
+        self.active_symbols: set = set()  # Set of symbols with active positions/orders
+        self.last_heartbeat_time = 0  # Track last heartbeat log time
+        
         # Alpha-Apex: Track position scaling state
         # {symbol: {"partial_taken": bool, "breakeven_set": bool, "reinvested": bool, "original_size": float}}
         self.position_scaling_state: Dict[str, Dict[str, Any]] = {}
@@ -98,6 +103,59 @@ class WEEXv2Client:
             "cmt_ltcusdt": 2,   # LTC: 2 decimals
             "ltcusdt": 2,       # LTC: 2 decimals (clean format)
         }
+        
+        # AI Wars Audit: Step size compliance (hardcoded constants per exchange specs)
+        self.step_size_map = {
+            "cmt_btcusdt": 0.01,   # BTC: 0.01 step size
+            "btcusdt": 0.01,
+            "cmt_ethusdt": 0.1,    # ETH: 0.1 step size
+            "ethusdt": 0.1,
+            "cmt_solusdt": 0.1,    # SOL: 0.1 step size
+            "solusdt": 0.1,
+            "cmt_adausdt": 1.0,    # ADA: 1.0 step size
+            "adausdt": 1.0,
+            "cmt_dogeusdt": 1.0,   # DOGE: 1.0 step size
+            "dogeusdt": 1.0,
+            "cmt_xrpusdt": 1.0,    # XRP: 1.0 step size
+            "xrpusdt": 1.0,
+            "cmt_bnbusdt": 0.1,    # BNB: 0.1 step size
+            "bnbusdt": 0.1,
+            "cmt_ltcusdt": 0.1,    # LTC: 0.1 step size
+            "ltcusdt": 0.1,
+        }
+        
+        # AI Wars Audit: Load persisted state if exists
+        self._load_state_from_file()
+    
+    def _load_state_from_file(self) -> None:
+        """
+        AI Wars Audit: Load persisted state from session.json
+        Ensures script restart remembers open positions
+        """
+        try:
+            if os.path.exists("session.json"):
+                with open("session.json", "r") as f:
+                    state = json.load(f)
+                    self.active_symbols = set(state.get("active_symbols", []))
+                    self.active_order_ids = state.get("active_order_ids", {})
+                    logger.info(f"✅ Loaded persisted state: {len(self.active_symbols)} active symbols")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load state from session.json: {str(e)}")
+    
+    def _save_state_to_file(self) -> None:
+        """
+        AI Wars Audit: Save current state to session.json
+        """
+        try:
+            state = {
+                "active_symbols": list(self.active_symbols),
+                "active_order_ids": self.active_order_ids,
+                "timestamp": time.time()
+            }
+            with open("session.json", "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save state to session.json: {str(e)}")
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
@@ -121,6 +179,24 @@ class WEEXv2Client:
                 precision = 2
         return round(qty, precision)
     
+    def round_step_size(self, symbol: str, qty: float) -> float:
+        """
+        AI Wars Audit: Round quantity to exchange step size compliance
+        Uses hardcoded step sizes: 0.01 for BTC, 0.1 for ETH, etc.
+        """
+        if not symbol:
+            logger.warning(f"⚠️ Invalid symbol: {symbol}, using default step size 0.01")
+            step_size = 0.01
+        else:
+            step_size = self.step_size_map.get(symbol.lower(), 0.01)
+        
+        # Round to nearest step size
+        rounded = round(qty / step_size) * step_size
+        
+        # Also apply precision rounding for display
+        precision = self.precision_map.get(symbol.lower(), 2)
+        return round(rounded, precision)
+    
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                            query_string: str, body_str: str) -> str:
         # Ensure method is UPPERCASE
@@ -141,7 +217,11 @@ class WEEXv2Client:
         Send authenticated request to WEEX API using compact JSON for signatures.
         
         Alpha-Evo V3: Implements Exponential Backoff for 521 errors
+        AI Wars: Adds 1.5s delay between all API calls to avoid firewall
         """
+        # AI Wars: Add delay to avoid triggering firewall
+        time.sleep(1.5)
+        
         # Alpha-Evo V3: Exponential Backoff for 521 errors
         max_retries = 3
         base_backoff = 60  # Start at 60 seconds
@@ -187,10 +267,11 @@ class WEEXv2Client:
                     # Send the EXACT body_str used for the signature
                     response = self.session.post(url, headers=headers, data=body_str, timeout=30)
                 
-                if response.status_code == 521:
+                # AI Wars: Handle both 521 and 403 firewall errors
+                if response.status_code in [521, 403]:
                     # Alpha-Evo V3: Exponential Backoff
                     backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    logger.error(f"🔥 521 Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
+                    logger.error(f"🔥 {response.status_code} Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
                     self.last_521_error_time = time.time()
                     self.cooldown_seconds = backoff_time
                     
@@ -198,17 +279,17 @@ class WEEXv2Client:
                         time.sleep(backoff_time)
                         continue  # Retry
                     else:
-                        raise Exception(f"521 Firewall Error - Max retries ({max_retries}) exceeded")
+                        raise Exception(f"{response.status_code} Firewall Error - Max retries ({max_retries}) exceeded")
                     
                 # Success - reset cooldown to base
                 self.cooldown_seconds = 60
                 return response
                 
             except Exception as e:
-                if "521" not in str(e) or retry >= max_retries - 1:
+                if ("521" not in str(e) and "403" not in str(e)) or retry >= max_retries - 1:
                     logger.error(f"❌ Request failed: {str(e)}")
                     raise
-                # For 521 errors, continue to retry
+                # For firewall errors, continue to retry
                 continue
         
         # Defensive fallback - should not reach here due to retry loop logic
@@ -218,19 +299,17 @@ class WEEXv2Client:
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
     # -------------------------------------------------------------------------
     def get_market_klines(self, symbol: str, interval: str = '1m', limit: int = 100) -> List[List[float]]:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
         """
         Get K-lines (candlestick) data from WEEX
         Endpoint: GET /capi/v2/market/candles
         """
         try:
+            # Clean symbol for API call but preserve granularity param
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             path = "/capi/v2/market/candles"
             
-            query_params = f"?symbol={urllib.parse.quote(symbol)}&granularity={interval}&limit={limit}"
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}&granularity={interval}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -327,15 +406,16 @@ class WEEXv2Client:
     # CRITICAL FIX 3: Market Price (Fixes "Shadow Mode" / BTC $90k issue)
     # -------------------------------------------------------------------------
     def get_market_price(self, symbol: str) -> float:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
+        """
+        Get current market price from WEEX ticker endpoint
+        """
         try:
+            # Clean symbol for API call
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             # We use the ticker endpoint for the latest price
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={symbol}"
+            query_params = f"?symbol={clean_symbol_value}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -387,17 +467,15 @@ class WEEXv2Client:
             return None
     
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
         """
         Get ticker (24h stats) from WEEX
         """
         try:
+            # Clean symbol for API call
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -520,7 +598,25 @@ class WEEXv2Client:
                             # Add equity to the item for backwards compatibility
                             item['equity'] = equity
                             item['totalEquity'] = equity
-                            logger.info(f"✅ Verified Competition Equity Balance: {equity} USDT")
+                            
+                            # AI Wars: Extract available balance for precise logging
+                            available = 0.0
+                            for key in ['availableBalance', 'available', 'availableFunds']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        available = float(item[key])
+                                        if available != 0.0:
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # AI Wars: Log both Equity and Available
+                            logger.info(f"[LOG] Equity: ${equity:.2f} | Available: ${available:.2f}")
+                            
+                            # AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
+                            item['availableBalance'] = available
+                            item['liquidCapital'] = self._calculate_liquid_capital(available)
+                            
                             return item
                     
                 # If no list found, return a safe structure
@@ -529,11 +625,52 @@ class WEEXv2Client:
         except Exception as e:
             logger.error(f"Balance parsing error: {str(e)}")
             return None
+    
+    def _calculate_liquid_capital(self, available: float) -> float:
+        """
+        AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
+        of all active trades from available balance
+        
+        Args:
+            available: Available balance from exchange
+            
+        Returns:
+            Liquid capital available for new trades
+        """
+        try:
+            # Query all open positions to get their initial margin
+            path = "/capi/v2/positions/pending-orders?productType=umcbl"
+            response = self.send_weex_request("GET", path)
+            
+            if response and response.status_code == 200:
+                data = response.json()
+                positions = data.get('data', {}).get('positions', [])
+                
+                total_initial_margin = 0.0
+                for pos in positions:
+                    try:
+                        # Extract initial margin for each active position
+                        initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 0)
+                        total_initial_margin += initial_margin
+                    except (ValueError, TypeError):
+                        continue
+                
+                liquid = available - total_initial_margin
+                logger.info(f"💧 Liquid Capital: ${liquid:.2f} (Available: ${available:.2f} - Initial Margin: ${total_initial_margin:.2f})")
+                return max(0.0, liquid)  # Never return negative
+            
+            # If API call fails, return available as-is
+            return available
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to calculate liquid capital: {str(e)}, using available balance")
+            return available
         
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Uses V2 settings endpoint: /capi/v2/account/setLeverage
+            Uses V2 settings endpoint: /capi/v2/account/settings
+            Falls back to /capi/v2/account/setLeverage on 404
             
             Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
             as required by competition rules.
@@ -541,8 +678,8 @@ class WEEXv2Client:
             # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
             clean_symbol = self.clean_symbol(symbol)
             
-            # Use the correct V2 endpoint for account settings
-            path = "/capi/v2/account/setLeverage"
+            # Primary endpoint: /capi/v2/account/settings
+            path = "/capi/v2/account/settings"
             
             body = {
                 "symbol": clean_symbol,
@@ -567,9 +704,9 @@ class WEEXv2Client:
                     logger.warning(f"⚠️ Leverage API response {symbol}: {data}")
                     return False
                 
-                # If 404, try the fallback path (some Weex accounts use V1 logic)
+                # If 404, try the fallback path /capi/v2/account/setLeverage
                 if response.status_code == 404:
-                    logger.warning(f"⚠️ Endpoint {path} not found. Trying fallback path...")
+                    logger.warning(f"⚠️ Endpoint {path} not found (404). Trying fallback path /capi/v2/account/setLeverage...")
                     return self._set_leverage_fallback(symbol, leverage)
                     
                 logger.warning(f"⚠️ Leverage Status {response.status_code}: {response.text}")
@@ -580,29 +717,41 @@ class WEEXv2Client:
                 return False
     
     def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
-        """Fallback method for setting leverage if the main V2 path fails"""
+        """
+        Fallback leverage setter using /capi/v2/account/setLeverage endpoint
+        """
         try:
-            # Clean symbol for API call
             clean_symbol = self.clean_symbol(symbol)
+            path = "/capi/v2/account/setLeverage"
             
-            # Fallback Path (V1/Mix style)
-            path = "/api/v1/contract/account/set_leverage"
             body = {
                 "symbol": clean_symbol,
                 "leverage": int(leverage),
-                "margin_mode": 2 
+                "marginMode": 2
             }
+            
             response = self.send_weex_request("POST", path, body=body)
-                
+            
             if response.status_code == 200:
                 data = response.json()
-                if data.get('success') or data.get('code') == '00000':
-                    logger.info(f"✅ Leverage (Fallback) confirmed at {leverage}x for {symbol}")
+                if data.get('code') == '00000' or data.get('success') is True:
+                    logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol} (fallback)")
                     return True
+                
+                msg = str(data.get('msg', data.get('message', ''))).lower()
+                if "already" in msg or "no change" in msg:
+                    return True
+                    
+                logger.warning(f"⚠️ Fallback leverage response: {data}")
+                return False
+            
+            logger.warning(f"⚠️ Fallback leverage failed: {response.status_code}")
             return False
-        except:
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Fallback leverage exception: {str(e)}")
             return False
-        
+    
     def has_open_position(self, symbol: str) -> bool:
         # 1. Clean symbol first
         symbol = symbol.replace('cmt_', '').upper()
@@ -650,13 +799,38 @@ class WEEXv2Client:
             return False
     
     def place_market_order(self, symbol: str, side: str, size: float,
-                           check_spread: bool = True) -> Optional[Dict[str, Any]]:
-        symbol = symbol.lower()
+                           check_spread: bool = True, 
+                           stop_loss_price: Optional[float] = None,
+                           take_profit_price: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """
+        Place a market order with optional TP/SL parameters
+        
+        Args:
+            symbol: Trading symbol
+            side: Order side (BUY, SELL, CLOSE_LONG, CLOSE_SHORT)
+            size: Order size
+            check_spread: Whether to check spread before placing order
+            stop_loss_price: Optional stop loss trigger price for exchange-side safety
+            take_profit_price: Optional take profit trigger price for exchange-side safety
+        
+        Returns:
+            Order response dict or None
+        """
+        # Store original symbol for internal tracking
+        symbol_internal = symbol.lower()
+        
+        # AI Wars: Prevent opening new position if active position/order exists
+        if side in ["BUY", "SELL"] and symbol_internal in self.active_symbols:
+            logger.warning(f"🚫 AI Wars: Cannot open new position on {symbol} - active position/order already exists")
+            return None
         
         try:
-            # ... (Spread guard and round_qty logic stays the same) ...
-            size = self.round_qty(symbol, size)
+            # AI Wars Audit: Use step size rounding for exchange compliance
+            size = self.round_step_size(symbol_internal, size)
             client_oid = str(uuid.uuid4()).replace("-", "")[:30]
+            
+            # Clean symbol for API call: BTCUSDT format (no cmt_ prefix, uppercase)
+            clean_symbol_value = self.clean_symbol(symbol)
             
             side_map = {
                 "BUY": "1", "SELL": "2",
@@ -665,20 +839,30 @@ class WEEXv2Client:
             
             path = "/capi/v2/order/placeOrder"
             body_dict = {
-                "symbol": symbol,
+                "symbol": clean_symbol_value,
                 "client_oid": client_oid,
                 "side": side_map.get(side.upper(), "1"),
                 "type": "1",         # Market Order
                 "order_type": "0",
-                "size": str(size),
+                "size": str(float(size)),  # AI Wars: Ensure string conversion via float to avoid scientific notation
                 "match_price": "1"
             }
             
-            # CRITICAL FIX: Convert dict to a COMPACT string (no spaces)
-            # This ensures the signature matches exactly what the server sees.
+            # AI Wars Audit: Add exchange-side TP/SL parameters with reduceOnly flag
+            if stop_loss_price is not None:
+                body_dict["stopLossTriggerPrice"] = str(float(stop_loss_price))
+                body_dict["stopLossReduceOnly"] = "true"  # Prevent accidental new position opening
+            
+            if take_profit_price is not None:
+                body_dict["takeProfitTriggerPrice"] = str(float(take_profit_price))
+                body_dict["takeProfitReduceOnly"] = "true"  # Prevent accidental new position opening
+            
+            # AI Wars: Convert dict to COMPACT string with all numerical values as strings
+            # This ensures the signature matches exactly what the server sees and avoids scientific notation.
             body_json = json.dumps(body_dict, separators=(',', ':'))
             
             # Pass the STRING body, not the dict, to your request sender
+            # Note: send_weex_request already handles delays and firewall errors (403/521)
             response = self.send_weex_request("POST", path, body=body_json)
             
             # ... (Rest of your response handling) ...
@@ -700,7 +884,18 @@ class WEEXv2Client:
                 
                 # Note: Success usually returns the order_id directly as we saw in the test
                 if data.get('order_id') or error_code == ERROR_CODE_SUCCESS:
-                    logger.info(f"✅ Success! ID: {data.get('order_id')}")
+                    order_id = data.get('order_id') or data.get('orderId')
+                    logger.info(f"✅ Success! ID: {order_id}")
+                    
+                    # AI Wars: Track active order and symbol (use internal symbol format)
+                    if side in ["BUY", "SELL"]:
+                        if order_id:
+                            self.active_order_ids[symbol_internal] = order_id
+                        self.active_symbols.add(symbol_internal)
+                        
+                        # AI Wars Audit: Save state to file for persistence
+                        self._save_state_to_file()
+                    
                     return data
             return None
 
@@ -874,6 +1069,19 @@ class WEEXv2Client:
             # Clean up scaling state
             if symbol in self.position_scaling_state:
                 del self.position_scaling_state[symbol]
+            
+            # AI Wars: Remove from active tracking
+            symbol_lower = symbol.lower()
+            if not symbol_lower.startswith('cmt_'):
+                symbol_lower = f'cmt_{symbol_lower}'
+            
+            self.active_symbols.discard(symbol_lower)
+            if symbol_lower in self.active_order_ids:
+                del self.active_order_ids[symbol_lower]
+            
+            # AI Wars Audit: Save state after closing position
+            self._save_state_to_file()
+            
             return True
         else:
             logger.error(f"❌ Failed to close position for {symbol}")
@@ -1061,3 +1269,88 @@ class WEEXv2Client:
             
         except Exception as e:
             logger.error(f"Failed to save failed log: {str(e)}")
+    
+    def log_heartbeat(self) -> None:
+        """
+        AI Wars: Log heartbeat every 10 minutes showing active trades and unrealized PnL
+        """
+        current_time = time.time()
+        
+        # Only log heartbeat every 10 minutes (600 seconds)
+        if current_time - self.last_heartbeat_time < 600:
+            return
+        
+        try:
+            # Get active symbols from open positions
+            active_trades = list(self.active_symbols)
+            
+            # Calculate total unrealized PnL
+            total_unrealized_pnl = 0.0
+            
+            for symbol in active_trades:
+                if symbol in self.open_positions:
+                    position = self.open_positions[symbol]
+                    # Get current price
+                    klines = self.get_market_klines(symbol, interval='1m', limit=1)
+                    if klines and len(klines) > 0:
+                        current_price = float(klines[-1][4])
+                        entry_price = float(position.get('entryPrice', 0))
+                        size = float(position.get('size', 0))
+                        side = position.get('side', '').upper()
+                        
+                        if entry_price > 0:
+                            # Calculate unrealized PnL
+                            if side == "LONG":
+                                pnl = (current_price - entry_price) * abs(size)
+                            else:  # SHORT
+                                pnl = (entry_price - current_price) * abs(size)
+                            
+                            total_unrealized_pnl += pnl
+            
+            # Format active trades list
+            active_trades_str = ', '.join([s.upper().replace('CMT_', '') for s in active_trades]) if active_trades else 'None'
+            
+            # Get equity and available balance for CSV logging
+            equity = 0.0
+            available = 0.0
+            try:
+                balance_data = self.get_account_balance()
+                if balance_data:
+                    equity = float(balance_data.get('equity', 0) or balance_data.get('totalEquity', 0) or 0)
+                    available = float(balance_data.get('availableBalance', 0) or balance_data.get('available', 0) or 0)
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to fetch balance for heartbeat: {str(e)}")
+            
+            # AI Wars: Heartbeat log format
+            logger.info(f"💓 Heartbeat | Active Trades: [{active_trades_str}] | Total Unrealized PnL: {total_unrealized_pnl:+.2f} USDT")
+            
+            # AI Wars Audit: Append to performance.csv for monitoring
+            try:
+                import csv
+                from datetime import datetime
+                
+                csv_exists = os.path.exists("performance.csv")
+                with open("performance.csv", "a", newline='') as csvfile:
+                    fieldnames = ['timestamp', 'equity', 'available', 'unrealized_pnl', 'active_trades_count']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    
+                    # Write header if file is new
+                    if not csv_exists:
+                        writer.writeheader()
+                    
+                    # Write performance row
+                    writer.writerow({
+                        'timestamp': datetime.now().isoformat(),
+                        'equity': f"{equity:.2f}",
+                        'available': f"{available:.2f}",
+                        'unrealized_pnl': f"{total_unrealized_pnl:+.2f}",
+                        'active_trades_count': len(active_trades)
+                    })
+            except Exception as e:
+                logger.error(f"Failed to write to performance.csv: {str(e)}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log heartbeat: {str(e)}")
+        finally:
+            # Update timestamp to reflect actual completion time
+            self.last_heartbeat_time = time.time()

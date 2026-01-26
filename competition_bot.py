@@ -72,6 +72,7 @@ SL_THRESHOLD_SHORT_PCT = 0.40  # 0.40% stop-loss for shorts (tighter due to unli
 EQUITY_SIZING_PCT = 10.0  # 10% of equity per trade
 KILL_SWITCH_PCT = 10.0  # Kill switch if equity drops >10% in 24h
 GLOBAL_MAX_EXPOSURE_PCT = 25.0  # Critical Fix 2: Max 25% of equity in active positions
+RISK_PERCENT = 2.0  # AI Wars: Risk percentage for fixed-fractional position sizing (default: 2%)
 
 # Enhancement 5: Fee calculation
 TAKER_FEE_PCT = 0.06  # 0.06% taker fee on WEEX
@@ -476,16 +477,22 @@ class CompetitionTradingBot:
         except Exception as e:
             logger.error(f"Failed to check tournament goals: {str(e)}")
     
-    def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20, side: str = "BUY") -> float:
+    def calculate_position_size(self, symbol: str, current_price: float, leverage: int = 20, side: str = "BUY", 
+                               stop_loss_price: Optional[float] = None) -> float:
         """
-        Calculate position size using 10% equity sizing
-        Formula: qty = (Account_Balance * 0.10 * Leverage) / Current_Price
+        Calculate position size using fixed-fractional risk management or equity sizing
+        
+        AI Wars: If stop_loss_price is provided, uses Risk-at-Risk model:
+            size = (Equity * Risk_Percent) / (Entry_Price - Stop_Loss_Price)
+        Otherwise, uses traditional equity sizing:
+            qty = (Account_Balance * 0.10 * Leverage) / Current_Price
         
         Args:
             symbol: Trading symbol
             current_price: Current market price
             leverage: Trading leverage
             side: Trade side ("BUY" or "SELL")
+            stop_loss_price: Optional stop loss price for fixed-fractional sizing
             
         Returns:
             Position size rounded to correct precision
@@ -493,7 +500,25 @@ class CompetitionTradingBot:
         try:
             equity = self.get_current_equity()
             
-            # Calculate position size
+            # AI Wars: Fixed-Fractional Position Sizing with Risk-at-Risk model
+            if stop_loss_price is not None:
+                # Calculate risk per contract
+                risk_per_contract = abs(current_price - stop_loss_price)
+                
+                if risk_per_contract == 0:
+                    logger.warning(f"⚠️ Risk per contract is zero, falling back to equity sizing")
+                else:
+                    # size = (Equity * Risk_Percent) / (Entry_Price - Stop_Loss_Price)
+                    risk_amount = equity * (RISK_PERCENT / 100.0)
+                    qty = risk_amount / risk_per_contract
+                    
+                    # Round to correct precision
+                    qty = self.client.round_qty(symbol, qty)
+                    
+                    logger.info(f"💰 AI Wars Fixed-Fractional Position size for {symbol}: {qty} (Equity: ${equity:.2f}, Risk: {RISK_PERCENT}%, SL Distance: ${risk_per_contract:.2f})")
+                    return qty
+            
+            # Traditional equity sizing (fallback or when no SL provided)
             position_value = equity * (EQUITY_SIZING_PCT / 100.0) * leverage
             
             # Alpha-Evo: Apply daily profit protection (50% size reduction)
@@ -539,9 +564,17 @@ class CompetitionTradingBot:
                         total_exposure += notional_value
             
             balance = self.client.get_account_balance()
-            if balance and 'availableBalance' in balance:
-                total_equity = float(balance['availableBalance'])
-                return (total_exposure / total_equity) * 100 if total_equity > 0 else 0.0
+            if balance:
+                # Use equity (totalEquity preferred, fallback to equity) as denominator
+                total_equity = float(balance.get('totalEquity', 0) or balance.get('equity', 0) or 0)
+                
+                # Guard division by zero
+                if total_equity > 0:
+                    return (total_exposure / total_equity) * 100
+                else:
+                    logger.warning("⚠️ Total equity is zero, cannot calculate exposure")
+                    return 0.0
+            
             return 0.0
         except Exception as e:
             logger.error(f"Failed to calculate total exposure: {str(e)}")
@@ -1616,18 +1649,31 @@ class CompetitionTradingBot:
                     logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
                     return
                 
-                # Calculate position size dynamically
-                position_size = self.calculate_position_size(symbol, current_price)
+                # AI Wars: Calculate TP/SL prices for exchange-side safety
+                # Get ATR for dynamic stop loss
+                indicators = self.analyze_market(klines)
+                atr_pct = indicators.get('atr_pct', STOP_LOSS_PCT)
+                
+                # Calculate SL and TP prices for BUY
+                stop_loss_price = current_price * (1 - (atr_pct / 100.0))
+                take_profit_price = current_price * (1 + (TAKE_PROFIT_PCT / 100.0))
+                
+                # AI Wars: Calculate position size with fixed-fractional method
+                position_size = self.calculate_position_size(symbol, current_price, side="BUY", stop_loss_price=stop_loss_price)
                 
                 # Tournament Compliance: Verify 20x leverage before placing order
                 leverage_ok = self.client.set_leverage(symbol, leverage=20)
                 if not leverage_ok:
                     logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - proceeding with trade anyway (assuming manual 20x setup)")
                 
-                # Place BUY order
+                # Place BUY order with TP/SL
                 logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
+                logger.info(f"🎯 AI Wars TP/SL: Entry=${current_price:.2f}, SL=${stop_loss_price:.2f}, TP=${take_profit_price:.2f}")
                 
-                order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True)
+                # AI Wars: Place order with exchange-side TP/SL parameters
+                order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True,
+                                                       stop_loss_price=stop_loss_price, 
+                                                       take_profit_price=take_profit_price)
                 
                 if order:
                     # Get order ID for AI log submission
@@ -1756,16 +1802,28 @@ class CompetitionTradingBot:
                         logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
                         return
                     
-                    # Calculate position size for SHORT
-                    position_size = self.calculate_position_size(symbol, current_price, side="SELL")
+                    # AI Wars: Calculate TP/SL prices for SHORT (inverse of LONG)
+                    # Get ATR for dynamic stop loss
+                    indicators = self.analyze_market(klines)
+                    atr_pct = indicators.get('atr_pct', STOP_LOSS_PCT)
+                    
+                    # Calculate SL and TP prices for SELL (SHORT)
+                    stop_loss_price = current_price * (1 + (atr_pct / 100.0))  # SL above entry for shorts
+                    take_profit_price = current_price * (1 - (TAKE_PROFIT_PCT / 100.0))  # TP below entry for shorts
+                    
+                    # AI Wars: Calculate position size with fixed-fractional method
+                    position_size = self.calculate_position_size(symbol, current_price, side="SELL", stop_loss_price=stop_loss_price)
                     
                     # Tournament Compliance: Verify 20x leverage before placing order
                     leverage_ok = self.client.set_leverage(symbol, leverage=20)
                     if not leverage_ok:
                         logger.warning(f"⚠️ Failed to verify 20x leverage for {symbol} - proceeding with trade anyway (assuming manual 20x setup)")
                     
-                    # Place SELL order to open SHORT
-                    order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True)
+                    # Place SELL order to open SHORT with TP/SL
+                    logger.info(f"🎯 AI Wars TP/SL: Entry=${current_price:.2f}, SL=${stop_loss_price:.2f}, TP=${take_profit_price:.2f}")
+                    order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True,
+                                                           stop_loss_price=stop_loss_price, 
+                                                           take_profit_price=take_profit_price)
                     
                     if order:
                         logger.info(f"✅ SHORT order placed successfully on {symbol}")
@@ -2083,6 +2141,9 @@ class CompetitionTradingBot:
                 
                 # Check TP/SL for all positions
                 self.check_tp_sl_all_symbols()
+                
+                # AI Wars: Log heartbeat every 10 minutes
+                self.client.log_heartbeat()
                 
                 # Alpha-Evo V3: Check hedge pruning
                 for symbol in SYMBOL_LIST:
