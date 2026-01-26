@@ -544,7 +544,17 @@ class WEEXv2Client:
             logger.error(f"Failed to check spread for {symbol}: {str(e)}")
             return True  # Allow trade on error (failsafe)
     
-    def get_account_balance(self) -> Optional[Dict[str, Any]]:
+    def get_account_balance(self, retry_count: int = 0, max_retries: int = 3) -> Optional[Dict[str, Any]]:
+        """
+        Get account balance with 521 error handling.
+        
+        Args:
+            retry_count: Current retry attempt (internal use)
+            max_retries: Maximum number of retries for 521 errors
+            
+        Returns:
+            Account balance data or None
+        """
         try:
             path = "/capi/v2/account/accounts?productType=umcbl"
             response = self.send_weex_request("GET", path)
@@ -573,21 +583,20 @@ class WEEXv2Client:
                                     except (ValueError, TypeError):
                                         continue
                             
-                            # If no valid non-zero value was found, use fallback
+                            # Handle zero balance - retry instead of using fallback
+                            if equity == 0.0 and retry_count < max_retries:
+                                logger.warning(f"🛑 Zero balance detected. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                                time.sleep(60)
+                                return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                            
+                            # If still 0 after retries, stop trading
                             if equity == 0.0:
-                                # Emergency startup balance: if this is the first check and balance is 0
-                                if self.is_first_balance_check:
-                                    # First check returned 0, use emergency startup balance
-                                    logger.warning(f"⚠️ First balance check returned 0.0, using emergency startup balance: ${self.EMERGENCY_STARTUP_BALANCE}")
-                                    equity = self.EMERGENCY_STARTUP_BALANCE
-                                    self.last_known_positive_balance = equity
-                                    self.is_first_balance_check = False
-                                else:
-                                    # Use last known positive balance
-                                    logger.info(f"⚠️ Zero balance detected, using last known positive balance: {self.last_known_positive_balance}")
-                                    equity = self.last_known_positive_balance
+                                logger.error("❌ Balance is still 0.0 after retries. Bot cannot trade without balance.")
+                                # Return None to indicate failure - don't use hardcoded fallback
+                                return None
+                            
                             # Safety check: if balance < 0, use last known positive balance
-                            elif equity < 0:
+                            if equity < 0:
                                 logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
                                 equity = self.last_known_positive_balance
                             elif equity > 0:
@@ -619,10 +628,28 @@ class WEEXv2Client:
                             
                             return item
                     
-                # If no list found, return a safe structure
-                return {"equity": self.last_known_positive_balance, "totalEquity": self.last_known_positive_balance} 
+                # If no list found, retry or fail
+                if retry_count < max_retries:
+                    logger.warning(f"🛑 No collateral data found. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                    time.sleep(60)
+                    return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                return None
+                
+            # Handle 521 errors - should be handled by send_weex_request, but add extra safety
+            if response.status_code in [521, 403]:
+                if retry_count < max_retries:
+                    logger.warning(f"🛑 Firewall active ({response.status_code}). Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                    time.sleep(60)
+                    return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                    
             return None
         except Exception as e:
+            # Check if this is a 521/403 error that escaped send_weex_request
+            if ("521" in str(e) or "403" in str(e) or "Firewall" in str(e)) and retry_count < max_retries:
+                logger.warning(f"🛑 Firewall error detected. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                time.sleep(60)
+                return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+            
             logger.error(f"Balance parsing error: {str(e)}")
             return None
     
