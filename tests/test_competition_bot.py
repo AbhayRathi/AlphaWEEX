@@ -424,7 +424,7 @@ class TestWEEXv2Client:
                 assert body_data['type'] == "MARKET"
     
     def test_get_account_balance_zero_protection(self):
-        """Test that get_account_balance handles zero balance with fallback"""
+        """Test that get_account_balance retries on zero balance instead of using fallback"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock API response with zero balance
@@ -441,12 +441,12 @@ class TestWEEXv2Client:
             ]
         }
         
-        with patch.object(client, 'send_weex_request', return_value=mock_response):
-            # First call should use emergency startup balance
-            balance = client.get_account_balance()
-            assert balance is not None
-            assert balance['equity'] == client.EMERGENCY_STARTUP_BALANCE
-            assert balance['totalEquity'] == client.EMERGENCY_STARTUP_BALANCE
+        # Mock time.sleep to avoid actual delays
+        with patch('time.sleep'):
+            with patch.object(client, 'send_weex_request', return_value=mock_response):
+                # Should retry 3 times then return None (not fallback)
+                balance = client.get_account_balance()
+                assert balance is None, "Should return None after retries, not use emergency fallback"
     
     def test_get_account_balance_comprehensive_key_checking(self):
         """Test that get_account_balance checks all equity keys"""
