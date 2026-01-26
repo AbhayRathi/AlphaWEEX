@@ -106,22 +106,22 @@ class WEEXv2Client:
         
         # AI Wars Audit: Step size compliance (hardcoded constants per exchange specs)
         self.step_size_map = {
-            "cmt_btcusdt": 0.01,   # BTC: 0.01 step size
-            "btcusdt": 0.01,
-            "cmt_ethusdt": 0.1,    # ETH: 0.1 step size
-            "ethusdt": 0.1,
-            "cmt_solusdt": 0.1,    # SOL: 0.1 step size
-            "solusdt": 0.1,
-            "cmt_adausdt": 1.0,    # ADA: 1.0 step size
-            "adausdt": 1.0,
-            "cmt_dogeusdt": 1.0,   # DOGE: 1.0 step size
+            "cmt_btcusdt": 0.0001,   # BTC: 0.0001 step size (4 decimals)
+            "btcusdt": 0.0001,
+            "cmt_ethusdt": 0.001,    # ETH: 0.001 step size (3 decimals)
+            "ethusdt": 0.001,
+            "cmt_solusdt": 0.01,    # SOL: 0.01 step size (2 decimals)
+            "solusdt": 0.01,
+            "cmt_adausdt": 0.1,    # ADA: 0.1 step size (1 decimal)
+            "adausdt": 0.1,
+            "cmt_dogeusdt": 1.0,   # DOGE: 1.0 step size (whole numbers)
             "dogeusdt": 1.0,
-            "cmt_xrpusdt": 1.0,    # XRP: 1.0 step size
-            "xrpusdt": 1.0,
-            "cmt_bnbusdt": 0.1,    # BNB: 0.1 step size
-            "bnbusdt": 0.1,
-            "cmt_ltcusdt": 0.1,    # LTC: 0.1 step size
-            "ltcusdt": 0.1,
+            "cmt_xrpusdt": 0.1,    # XRP: 0.1 step size (1 decimal)
+            "xrpusdt": 0.1,
+            "cmt_bnbusdt": 0.001,    # BNB: 0.001 step size (3 decimals)
+            "bnbusdt": 0.001,
+            "cmt_ltcusdt": 0.01,    # LTC: 0.01 step size (2 decimals)
+            "ltcusdt": 0.01,
         }
         
         # AI Wars Audit: Load persisted state if exists
@@ -354,11 +354,6 @@ class WEEXv2Client:
     # CRITICAL FIX 2: Funding Rate (Returns Float, not String)
     # -------------------------------------------------------------------------
     def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
-        # FIX: Ensure symbol is lowercase and starts with 'cmt_'
-        symbol = symbol.lower()
-        if not symbol.startswith("cmt_"):
-            symbol = f"cmt_{symbol}"
-
         """
         Get current funding rate for a symbol from WEEX
         Returns a dictionary with 'rate' and 'sentiment' fields
@@ -369,8 +364,11 @@ class WEEXv2Client:
         - Otherwise = 'Neutral'
         """
         try:
+            # Clean symbol for API call
+            clean_symbol_value = self.clean_symbol(symbol)
+            
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(symbol)}"
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -561,15 +559,23 @@ class WEEXv2Client:
             
             if response.status_code == 200:
                 data = response.json()
-                collateral_list = data.get('collateral', [])
+                # Handle both formats: dict with 'collateral' key or direct list
+                if isinstance(data, list):
+                    collateral_list = data
+                else:
+                    collateral_list = data.get('collateral', [])
+                
                 if collateral_list:
                     for item in collateral_list:
-                        # Ensure we are looking at the USDT wallet (coin_id 2)
-                        if str(item.get('coin_id')) == "2":
-                            # Comprehensive equity key checking: try totalEquity, equity, accountEquity
+                        # Ensure we are looking at the USDT wallet
+                        # Check both coin_id (value "2") and coinName (value "USDT")
+                        is_usdt = (str(item.get('coin_id')) == "2" or 
+                                   str(item.get('coinName', '')).upper() == "USDT")
+                        if is_usdt:
+                            # Comprehensive equity key checking: try totalEquity, equity, accountEquity, available
                             equity = 0.0  # Default to 0.0 if no valid value found
                             found_value = False  # Track if we found any valid value
-                            for key in ['totalEquity', 'equity', 'accountEquity']:
+                            for key in ['totalEquity', 'equity', 'accountEquity', 'available']:
                                 if key in item and item[key] is not None:
                                     try:
                                         value = float(item[key])
@@ -790,13 +796,13 @@ class WEEXv2Client:
             return False
     
     def has_open_position(self, symbol: str) -> bool:
-        # 1. Clean symbol first
-        symbol = symbol.replace('cmt_', '').upper()
+        # 1. Clean symbol using the clean_symbol method for consistency
+        clean_symbol_value = self.clean_symbol(symbol)
         
         try:
             path = "/capi/v2/account/position/allPosition"
-            # Optional: API works better if we don't pass symbol in query for this specific endpoint
-            query_params = "" 
+            # Include symbol in query params for filtered results
+            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}" if clean_symbol_value else "" 
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -817,15 +823,15 @@ class WEEXv2Client:
                         pos_symbol = str(pos.get('symbol', '')).upper()
                         size = float(pos.get('size', 0))
                         
-                        if pos_symbol == symbol and size > 0:
-                            logger.info(f"📊 Open position found for {symbol}: {size} units")
-                            self.open_positions[symbol] = pos
+                        if pos_symbol == clean_symbol_value and size > 0:
+                            logger.info(f"📊 Open position found for {clean_symbol_value}: {size} units")
+                            self.open_positions[clean_symbol_value] = pos
                             return True
                     except (ValueError, TypeError):
                         continue
                 
-                if symbol in self.open_positions:
-                    del self.open_positions[symbol]
+                if clean_symbol_value in self.open_positions:
+                    del self.open_positions[clean_symbol_value]
                 return False
             else:
                 logger.error(f"❌ Position Check Failed (HTTP {response.status_code}): {response.text}")
@@ -894,13 +900,9 @@ class WEEXv2Client:
                 body_dict["takeProfitTriggerPrice"] = str(float(take_profit_price))
                 body_dict["takeProfitReduceOnly"] = "true"  # Prevent accidental new position opening
             
-            # AI Wars: Convert dict to COMPACT string with all numerical values as strings
-            # This ensures the signature matches exactly what the server sees and avoids scientific notation.
-            body_json = json.dumps(body_dict, separators=(',', ':'))
-            
-            # Pass the STRING body, not the dict, to your request sender
+            # Pass the dict body to send_weex_request, which will handle minification
             # Note: send_weex_request already handles delays and firewall errors (403/521)
-            response = self.send_weex_request("POST", path, body=body_json)
+            response = self.send_weex_request("POST", path, body=body_dict)
             
             # ... (Rest of your response handling) ...
             if response and response.status_code == 200:
@@ -920,8 +922,12 @@ class WEEXv2Client:
                     return None
                 
                 # Note: Success usually returns the order_id directly as we saw in the test
-                if data.get('order_id') or error_code == ERROR_CODE_SUCCESS:
-                    order_id = data.get('order_id') or data.get('orderId')
+                # Handle both numeric 0 and string "00000" success codes
+                is_success = (error_code == ERROR_CODE_SUCCESS or 
+                              error_code == "0" or 
+                              data.get('success') is True)
+                if data.get('order_id') or data.get('data', {}).get('orderId') or is_success:
+                    order_id = data.get('order_id') or data.get('orderId') or data.get('data', {}).get('orderId')
                     logger.info(f"✅ Success! ID: {order_id}")
                     
                     # AI Wars: Track active order and symbol (use internal symbol format)
