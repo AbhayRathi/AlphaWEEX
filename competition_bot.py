@@ -267,6 +267,33 @@ class CompetitionTradingBot:
         logger.info(f"📈 Trailing Stop: +2% = Breakeven, +4% = 1% Trail")
         logger.info("=" * 60)
     
+    def startup_sequence(self) -> None:
+        """
+        Spaced startup sequence to avoid Cloudflare 521 errors.
+        Spaces out initial API calls to prevent burst traffic detection.
+        """
+        logger.info("🚀 Initializing with extra caution to bypass 521...")
+        time.sleep(5)  # Wait 5 seconds before first contact
+        
+        # Tournament Compliance: Run auto-initialization check
+        self.auto_initialize()
+        time.sleep(3)  # Space out requests
+        
+        # Set leverage with spacing
+        self.initialize_leverage()
+        time.sleep(3)  # Space out requests
+        
+        # Sync balance
+        try:
+            balance_data = self.client.get_account_balance()
+            if balance_data:
+                equity = balance_data.get('equity', 0) or balance_data.get('totalEquity', 0)
+                logger.info(f"✅ Balance synced: ${equity:.2f}")
+        except Exception as e:
+            logger.warning(f"⚠️ Balance sync failed during startup: {e}")
+        
+        logger.info("✅ Startup sequence complete")
+    
     def initialize_leverage(self) -> None:
         """
         Force 20x leverage on startup for all symbols (Safety Guardrail)
@@ -2103,11 +2130,8 @@ class CompetitionTradingBot:
                 self.strategy_engine.reset_circuit_breaker()
                 logger.info("✅ Circuit breaker reset on startup")
             
-            # Tournament Compliance: Run auto-initialization check
-            self.auto_initialize()
-            
-            # Initialize leverage
-            self.initialize_leverage()
+            # Spaced startup sequence to avoid Cloudflare 521 errors
+            self.startup_sequence()
             
             # Alpha-Evo V3: Start failed log retry background thread
             self.start_failed_log_retry_thread()
