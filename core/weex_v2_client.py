@@ -560,9 +560,12 @@ class WEEXv2Client:
             if response.status_code == 200:
                 data = response.json()
                 # Handle both formats: dict with 'collateral' key or direct list
+                # Log which format is received for monitoring
                 if isinstance(data, list):
+                    logger.debug("Account balance response is a list (direct format)")
                     collateral_list = data
                 else:
+                    logger.debug("Account balance response is a dict (nested format)")
                     collateral_list = data.get('collateral', [])
                 
                 if collateral_list:
@@ -921,8 +924,10 @@ class WEEXv2Client:
                         logger.error(f"Failed to self-heal: {str(heal_error)}")
                     return None
                 
-                # Note: Success usually returns the order_id directly as we saw in the test
-                # Handle both numeric 0 and string "00000" success codes
+                # Check for success - handle multiple response formats:
+                # - code: "00000" (string success code from WEEX V2)
+                # - code: 0 (numeric success code from some endpoints)
+                # - success: true (boolean success flag)
                 is_success = (error_code == ERROR_CODE_SUCCESS or 
                               error_code == "0" or 
                               data.get('success') is True)
