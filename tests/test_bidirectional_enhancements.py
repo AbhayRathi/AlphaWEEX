@@ -58,17 +58,17 @@ class TestEnhancement2AsymmetricStopLoss:
         # This test verifies the constants are set correctly in weex_v2_client.py
         # The actual SL thresholds are defined in check_tp_sl_triggers method
         
-        # Mock client
+        # Mock client - use uppercase symbol without cmt_ prefix (as stored after cleaning)
         client = Mock(spec=WEEXv2Client)
         client.open_positions = {
-            "cmt_btcusdt": {
+            "BTCUSDT": {
                 "side": "SHORT",
                 "entryPrice": 100.0,
                 "size": -0.1
             }
         }
         client.position_scaling_state = {
-            "cmt_btcusdt": {
+            "BTCUSDT": {
                 "partial_taken": False,
                 "breakeven_set": False,
                 "reinvested": False,
@@ -96,17 +96,17 @@ class TestEnhancement2AsymmetricStopLoss:
     
     def test_long_uses_wider_stop_loss(self):
         """Test that longs use 0.50% SL"""
-        # Mock client
+        # Mock client - use uppercase symbol without cmt_ prefix (as stored after cleaning)
         client = Mock(spec=WEEXv2Client)
         client.open_positions = {
-            "cmt_btcusdt": {
+            "BTCUSDT": {
                 "side": "LONG",
                 "entryPrice": 100.0,
                 "size": 0.1
             }
         }
         client.position_scaling_state = {
-            "cmt_btcusdt": {
+            "BTCUSDT": {
                 "partial_taken": False,
                 "breakeven_set": False,
                 "reinvested": False,

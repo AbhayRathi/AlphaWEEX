@@ -87,9 +87,10 @@ class TestFundingRateAnalyzer:
         
         adjusted = self.analyzer.adjust_signal_with_funding(technical_signal, 0.07)
         
-        # Confidence should be reduced
-        assert adjusted["confidence"] < 0.8
-        assert "FUNDING ALERT" in adjusted["reason"]
+        # Confidence should be reduced or signal blocked
+        # With extreme positive funding (0.07 > 0.05), BUY is BLOCKED
+        assert adjusted["action"] == "HOLD"
+        assert "BLOCKED by funding rate enforcement" in adjusted["reason"]
         assert adjusted["funding_rate"] == 0.07
         assert adjusted["funding_classification"] == "EXTREME_POSITIVE"
     
@@ -127,7 +128,7 @@ class TestFundingRateAnalyzer:
         assert "Upgraded" in adjusted["reason"]
     
     def test_adjust_signal_override_to_hold(self):
-        """Test overriding BUY to HOLD when extreme positive funding reduces confidence"""
+        """Test overriding BUY to HOLD when extreme positive funding blocks trade"""
         # BUY signal with medium confidence
         technical_signal = {
             "action": "BUY",
@@ -137,9 +138,9 @@ class TestFundingRateAnalyzer:
         
         adjusted = self.analyzer.adjust_signal_with_funding(technical_signal, 0.1)
         
-        # Should be overridden to HOLD due to low confidence after adjustment
+        # Should be blocked to HOLD due to extreme positive funding (0.1 > 0.05)
         assert adjusted["action"] == "HOLD"
-        assert "Overridden to HOLD" in adjusted["reason"]
+        assert "BLOCKED by funding rate enforcement" in adjusted["reason"]
     
     def test_adjust_signal_neutral_funding(self):
         """Test that neutral funding doesn't affect signals"""
@@ -195,7 +196,7 @@ class TestFundingRateAnalyzer:
         assert classification == "EXTREME_NEGATIVE"
     
     def test_reduce_sell_confidence_on_negative_funding(self):
-        """Test reducing SELL confidence when short-squeeze is likely"""
+        """Test blocking SELL when extreme negative funding indicates short-squeeze risk"""
         # SELL signal with good confidence, but extreme negative funding
         technical_signal = {
             "action": "SELL",
@@ -205,9 +206,9 @@ class TestFundingRateAnalyzer:
         
         adjusted = self.analyzer.adjust_signal_with_funding(technical_signal, -0.08)
         
-        # Confidence should be reduced (short-squeeze risk)
-        assert adjusted["confidence"] < 0.75
-        assert "FUNDING WARNING" in adjusted["reason"]
+        # With extreme negative funding (-0.08 < -0.05), SELL should be BLOCKED
+        assert adjusted["action"] == "HOLD"
+        assert "BLOCKED by funding rate enforcement" in adjusted["reason"]
 
 
 if __name__ == "__main__":

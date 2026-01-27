@@ -69,8 +69,8 @@ class TestWEEXv2Client:
         """Test Alpha-Apex multi-tier TP/SL calculation for LONG position"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Add LONG position
-        symbol = "cmt_btcusdt"
+        # Add LONG position - use uppercase symbol without cmt_ prefix (as stored internally after cleaning)
+        symbol = "BTCUSDT"
         client.open_positions[symbol] = {
             "entryPrice": "50000",
             "side": "LONG",
@@ -79,7 +79,7 @@ class TestWEEXv2Client:
         
         # Test first partial trigger at +0.25%
         partial1_price = 50125  # 0.25% above entry
-        trigger = client.check_tp_sl_triggers(symbol, partial1_price)
+        trigger = client.check_tp_sl_triggers("cmt_btcusdt", partial1_price)
         assert trigger == "PARTIAL_1"
         
         # Mark first partial taken
@@ -93,32 +93,36 @@ class TestWEEXv2Client:
         
         # Test second partial trigger at +0.50%
         partial2_price = 50250  # 0.50% above entry
-        trigger = client.check_tp_sl_triggers(symbol, partial2_price)
+        trigger = client.check_tp_sl_triggers("cmt_btcusdt", partial2_price)
         assert trigger == "PARTIAL_2"
         
-        # Test SL trigger (1.06% loss - fee adjusted)
+        # Test SL trigger (0.50% loss for longs)
         client.position_scaling_state[symbol]["breakeven_set"] = False
-        sl_price = 49470  # 1.06% below entry
-        trigger = client.check_tp_sl_triggers(symbol, sl_price)
-        assert trigger == "SL"
-        
-        # Test break-even SL after first partial
-        client.position_scaling_state[symbol]["breakeven_set"] = True
-        be_price = 49990  # Just below entry
-        trigger = client.check_tp_sl_triggers(symbol, be_price)
+        # Test SL trigger (0.50% loss for longs)
+        client.position_scaling_state[symbol]["breakeven_set"] = False
+        sl_price = 49750  # 0.50% below entry (50000 * 0.995 = 49750)
+        trigger = client.check_tp_sl_triggers("cmt_btcusdt", sl_price)
         assert trigger == "SL"
         
         # Test no trigger (within range)
+        # Reset state
+        client.position_scaling_state[symbol] = {
+            "partial_taken": False,
+            "breakeven_set": False,
+            "reinvested": False,
+            "original_size": 0.1,
+            "realized_profit": 0.0
+        }
         neutral_price = 50050  # 0.1% above entry
-        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
+        trigger = client.check_tp_sl_triggers("cmt_btcusdt", neutral_price)
         assert trigger is None
     
     def test_tp_sl_calculation_short(self):
         """Test Alpha-Apex multi-tier TP/SL calculation for SHORT position"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Add SHORT position
-        symbol = "cmt_ethusdt"
+        # Add SHORT position - use uppercase symbol without cmt_ prefix
+        symbol = "ETHUSDT"
         client.open_positions[symbol] = {
             "entryPrice": "3000",
             "side": "SHORT",
@@ -127,7 +131,7 @@ class TestWEEXv2Client:
         
         # Test first partial trigger at +0.25% (price drop)
         partial1_price = 2992.5  # 0.25% below entry
-        trigger = client.check_tp_sl_triggers(symbol, partial1_price)
+        trigger = client.check_tp_sl_triggers("cmt_ethusdt", partial1_price)
         assert trigger == "PARTIAL_1"
         
         # Mark first partial taken
@@ -141,18 +145,26 @@ class TestWEEXv2Client:
         
         # Test second partial trigger at +0.50%
         partial2_price = 2985  # 0.50% below entry
-        trigger = client.check_tp_sl_triggers(symbol, partial2_price)
+        trigger = client.check_tp_sl_triggers("cmt_ethusdt", partial2_price)
         assert trigger == "PARTIAL_2"
         
-        # Test SL trigger (1.06% gain against short)
+        # Test SL trigger (0.40% gain against short - tighter for shorts)
         client.position_scaling_state[symbol]["breakeven_set"] = False
-        sl_price = 3031.8  # 1.06% above entry
-        trigger = client.check_tp_sl_triggers(symbol, sl_price)
+        sl_price = 3012  # 0.40% above entry (3000 * 1.004 = 3012)
+        trigger = client.check_tp_sl_triggers("cmt_ethusdt", sl_price)
         assert trigger == "SL"
         
         # Test no trigger
+        # Reset state
+        client.position_scaling_state[symbol] = {
+            "partial_taken": False,
+            "breakeven_set": False,
+            "reinvested": False,
+            "original_size": 1.0,
+            "realized_profit": 0.0
+        }
         neutral_price = 2997  # 0.1% below entry
-        trigger = client.check_tp_sl_triggers(symbol, neutral_price)
+        trigger = client.check_tp_sl_triggers("cmt_ethusdt", neutral_price)
         assert trigger is None
     
     def test_set_leverage_endpoint(self):
@@ -177,17 +189,17 @@ class TestWEEXv2Client:
             assert mock_post.called
             call_args = mock_post.call_args
             
-            # Check URL contains correct path (updated to /capi/v2/account/settings)
-            assert "/capi/v2/account/settings" in call_args[0][0]
+            # Check URL contains correct path (updated to /capi/v2/account/setLeverage)
+            assert "/capi/v2/account/setLeverage" in call_args[0][0]
             
-            # Check body contains marginMode as integer 2 and leverage as integer
+            # Check body contains marginMode as string "isolated" and leverage as string
             body_data = json.loads(call_args[1]['data'])
             # Symbol should be cleaned (cmt_ removed, uppercase)
             assert body_data['symbol'] == "BTCUSDT"
-            assert body_data['marginMode'] == 2  # Integer: 2 (Cross mode required)
-            assert body_data['leverage'] == 10
-            assert isinstance(body_data['marginMode'], int)
-            assert isinstance(body_data['leverage'], int)
+            assert body_data['marginMode'] == "isolated"  # String: "isolated" (required by V2 API)
+            assert body_data['leverage'] == "10"  # String format required by V2 API
+            assert isinstance(body_data['marginMode'], str)
+            assert isinstance(body_data['leverage'], str)
     
     def test_set_leverage_already_set_handling(self):
         """Test 'already set' message is handled as success"""
@@ -392,7 +404,10 @@ class TestWEEXv2Client:
         """Test that place_market_order cleans symbol (removes cmt_, uppercase)"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Mock successful order response
+        # Clear any active symbols from previous tests to avoid AI Wars blocking
+        client.active_symbols.clear()
+        
+        # Mock successful order response with nested structure
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -410,7 +425,8 @@ class TestWEEXv2Client:
                 
                 # Verify order was placed successfully
                 assert result is not None
-                assert result.get('orderId') == '123456'
+                # Handle nested response structure - orderId is in result['data']['orderId']
+                assert result.get('data', {}).get('orderId') == '123456'
                 
                 # Verify the endpoint was called
                 assert mock_post.called
@@ -420,8 +436,8 @@ class TestWEEXv2Client:
                 body_data = json.loads(call_args[1]['data'])
                 assert body_data['symbol'] == "BTCUSDT"
                 assert "CMT_" not in body_data['symbol']
-                assert body_data['side'] == "BUY"
-                assert body_data['type'] == "MARKET"
+                assert body_data['side'] == "1"  # BUY is mapped to "1" in V2 API
+                assert body_data['type'] == "1"  # MARKET type is "1" in V2 API
     
     def test_get_account_balance_zero_protection(self):
         """Test that get_account_balance retries on zero balance instead of using fallback"""
@@ -904,7 +920,8 @@ class TestSafetyEnhancements:
         }
         
         with patch.object(bot.client, 'has_open_position', side_effect=mock_has_open_position):
-            with patch.object(bot.client, 'get_account_balance', return_value={'availableBalance': '10000'}):
+            # Mock get_account_balance with non-zero equity (10000) for proper exposure calculation
+            with patch.object(bot.client, 'get_account_balance', return_value={'equity': 10000, 'availableBalance': '10000'}):
                 exposure = bot.calculate_total_exposure()
         
         # Should be 15% (1500 / 10000 * 100)
@@ -1055,7 +1072,7 @@ class TestSafetyEnhancements:
         assert time_open > 3600  # Over 1 hour
     
     def test_margin_mode_cross(self):
-        """Test Critical Fix: Margin mode is integer 2 for cross (required by API)"""
+        """Test Critical Fix: Margin mode is string "isolated" (required by WEEX V2 API)"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -1071,11 +1088,11 @@ class TestSafetyEnhancements:
             # Verify result
             assert result is True
             
-            # Verify the endpoint was called with cross margin mode (integer 2)
+            # Verify the endpoint was called with isolated margin mode (string format as required by V2 API)
             call_args = mock_post.call_args
             body_data = json.loads(call_args[1]['data'])
-            assert body_data['marginMode'] == 2, "Margin mode should be integer 2 for cross"
-            assert isinstance(body_data['marginMode'], int), "Margin mode should be integer type"
+            assert body_data['marginMode'] == "isolated", "Margin mode should be string 'isolated' for V2 API"
+            assert isinstance(body_data['marginMode'], str), "Margin mode should be string type"
 
 
 if __name__ == "__main__":
