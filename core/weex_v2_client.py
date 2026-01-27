@@ -13,6 +13,7 @@ import json
 import logging
 import urllib.parse
 import uuid
+import re
 from typing import Union, Dict, Any, Optional, List
 from datetime import datetime
 
@@ -235,7 +236,19 @@ class WEEXv2Client:
         
             timestamp = str(int(time.time() * 1000))
         
-            # 2. CRITICAL: Handle body stringification once and keep it compact
+            # 2. Strip cmt_ prefix from symbols in payload
+            if body and isinstance(body, dict):
+                if 'symbol' in body:
+                    body['symbol'] = body['symbol'].replace('cmt_', '').upper()
+            
+            # 3. Strip cmt_ prefix from symbols in query parameters
+            if query_params and 'symbol=' in query_params:
+                # Use regex to sanitize symbol parameter: remove cmt_ and uppercase
+                query_params = re.sub(r'symbol=cmt_([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params, flags=re.IGNORECASE)
+                # Handle case where symbol doesn't have cmt_ prefix but needs uppercasing
+                query_params = re.sub(r'symbol=([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params)
+        
+            # 4. CRITICAL: Handle body stringification once and keep it compact
             if body:
                 if isinstance(body, dict):
                     # Use separators to ensure NO whitespace (e.g., {"a":"b"} not {"a": "b"})
@@ -245,7 +258,7 @@ class WEEXv2Client:
             else:
                 body_str = ""
         
-            # 3. Generate signature using the same body_str that will be sent
+            # 5. Generate signature using the same body_str that will be sent
             signature = self.generate_signature(timestamp, method, path, query_params, body_str)
             
             headers = {
@@ -672,6 +685,34 @@ class WEEXv2Client:
             
             logger.error(f"Balance parsing error: {str(e)}")
             return None
+    
+    def get_account_assets(self) -> float:
+        """
+        Get account USDT balance from WEEX V2 Contract API.
+        This method specifically uses the /capi/v2/account/assets endpoint
+        to retrieve asset data in the V2 response format.
+        
+        Returns:
+            float: USDT equity (total value including unrealized PnL), or 0.0 if not found
+        """
+        try:
+            # This call must use the /capi/ (Contract) path
+            res = self.send_weex_request("GET", "/capi/v2/account/assets")
+            
+            if res and res.status_code == 200:
+                response_data = res.json()
+                if response_data.get("code") == "00000":
+                    data = response_data.get("data", [])
+                    # Iterate through the wallet list to find your USDT
+                    for asset in data:
+                        if asset.get("coinName") == "USDT":
+                            # V2 uses 'equity' for the total value including unrealized PnL
+                            val = asset.get("equity", asset.get("available", 0.0))
+                            return float(val)
+            return 0.0
+        except Exception as e:
+            logger.error(f"Failed to get account assets: {str(e)}")
+            return 0.0
     
     def _calculate_liquid_capital(self, available: float) -> float:
         """

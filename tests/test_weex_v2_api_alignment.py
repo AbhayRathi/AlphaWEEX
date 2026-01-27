@@ -369,5 +369,129 @@ class TestMarketDataMethods:
         assert "cmt_" not in query_params
 
 
+class TestGetAccountAssets:
+    """Test get_account_assets method with V2 API format"""
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_success(self, mock_send_request):
+        """Test get_account_assets with successful V2 response"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock V2 response format
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "code": "00000",
+            "data": [
+                {
+                    "coinName": "BTC",
+                    "equity": "0.5",
+                    "available": "0.4"
+                },
+                {
+                    "coinName": "USDT",
+                    "equity": "887.61",
+                    "available": "500.00"
+                }
+            ]
+        }
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify correct endpoint was called
+        call_args = mock_send_request.call_args
+        assert call_args[0][0] == "GET"
+        assert call_args[0][1] == "/capi/v2/account/assets"
+        
+        # Verify correct value returned (equity for USDT)
+        assert result == 887.61
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_fallback_to_available(self, mock_send_request):
+        """Test get_account_assets falls back to available when equity is missing"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock V2 response without equity field
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "code": "00000",
+            "data": [
+                {
+                    "coinName": "USDT",
+                    "available": "750.25"
+                }
+            ]
+        }
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify fallback to available
+        assert result == 750.25
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_no_usdt(self, mock_send_request):
+        """Test get_account_assets returns 0.0 when USDT not found"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock V2 response without USDT
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "code": "00000",
+            "data": [
+                {
+                    "coinName": "BTC",
+                    "equity": "0.5"
+                }
+            ]
+        }
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify returns 0.0
+        assert result == 0.0
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_error_code(self, mock_send_request):
+        """Test get_account_assets returns 0.0 on error code"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock V2 response with error code
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "code": "40001",
+            "msg": "Error"
+        }
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify returns 0.0
+        assert result == 0.0
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_exception(self, mock_send_request):
+        """Test get_account_assets handles exceptions gracefully"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock exception
+        mock_send_request.side_effect = Exception("Network error")
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify returns 0.0 on exception
+        assert result == 0.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
