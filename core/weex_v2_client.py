@@ -13,6 +13,7 @@ import json
 import logging
 import urllib.parse
 import uuid
+import re
 from typing import Union, Dict, Any, Optional, List
 from datetime import datetime
 
@@ -242,14 +243,10 @@ class WEEXv2Client:
             
             # 3. Strip cmt_ prefix from symbols in query parameters
             if query_params and 'symbol=' in query_params:
-                # Parse query params, clean symbol, rebuild
-                import urllib.parse
-                if '?' in query_params:
-                    query_params = query_params.replace('?', '')
-                params = urllib.parse.parse_qs(query_params)
-                if 'symbol' in params:
-                    params['symbol'] = [params['symbol'][0].replace('cmt_', '').upper()]
-                    query_params = '?' + urllib.parse.urlencode(params, doseq=True)
+                # Use regex to sanitize symbol parameter: remove cmt_ and uppercase
+                query_params = re.sub(r'symbol=cmt_([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params, flags=re.IGNORECASE)
+                # Handle case where symbol doesn't have cmt_ prefix but needs uppercasing
+                query_params = re.sub(r'symbol=([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params)
         
             # 4. CRITICAL: Handle body stringification once and keep it compact
             if body:
