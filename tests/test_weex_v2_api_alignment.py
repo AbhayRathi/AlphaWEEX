@@ -224,6 +224,8 @@ class TestPlaceMarketOrder:
     def test_place_market_order_uses_clean_symbol(self, mock_send_request, mock_check_spread):
         """Test that place_market_order uses clean_symbol for API call"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        # Clear any active symbols from previous tests
+        client.active_symbols.clear()
         
         # Mock spread check
         mock_check_spread.return_value = True
@@ -249,6 +251,8 @@ class TestPlaceMarketOrder:
     def test_place_market_order_payload_format(self, mock_send_request, mock_check_spread):
         """Test that place_market_order has correct payload format to avoid 40020 error"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        # Clear any active symbols from previous tests
+        client.active_symbols.clear()
         
         # Mock spread check
         mock_check_spread.return_value = True

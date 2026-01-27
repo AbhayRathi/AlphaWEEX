@@ -718,8 +718,13 @@ class WEEXv2Client:
             Sets the leverage for a specific symbol.
             Uses V2 endpoint: /capi/v2/account/setLeverage
             
-            Note: margin_mode parameter is kept for API compatibility but always uses isolated mode
-            as required by WEEX V2 API.
+            Args:
+                symbol: Trading symbol (e.g., "cmt_btcusdt" or "BTCUSDT")
+                leverage: Leverage multiplier (will be converted to string for API)
+                margin_mode: Kept for API compatibility but always uses "isolated" as required by WEEX V2 API
+            
+            Returns:
+                bool: True if leverage was set successfully, False otherwise
             """
             # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
             clean_symbol = self.clean_symbol(symbol)
@@ -727,10 +732,11 @@ class WEEXv2Client:
             # Primary endpoint: /capi/v2/account/setLeverage (POST)
             path = "/capi/v2/account/setLeverage"
             
+            # WEEX V2 API requires string format for all parameters
             body = {
                 "symbol": clean_symbol,
-                "leverage": str(leverage),  # WEEX V2 API requires string format
-                "marginMode": "isolated"    # WEEX V2 API requires string format
+                "leverage": str(leverage),
+                "marginMode": "isolated"  # Always use isolated mode as required by WEEX V2 API
             }
             
             try:
@@ -756,42 +762,6 @@ class WEEXv2Client:
             except Exception as e:
                 logger.warning(f"⚠️ Leverage Exception: {str(e)}")
                 return False
-    
-    def _set_leverage_fallback(self, symbol: str, leverage: int) -> bool:
-        """
-        Fallback leverage setter using /capi/v2/account/setLeverage endpoint
-        """
-        try:
-            clean_symbol = self.clean_symbol(symbol)
-            path = "/capi/v2/account/setLeverage"
-            
-            body = {
-                "symbol": clean_symbol,
-                "leverage": int(leverage),
-                "marginMode": 2
-            }
-            
-            response = self.send_weex_request("POST", path, body=body)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('code') == '00000' or data.get('success') is True:
-                    logger.info(f"✅ Leverage confirmed at {leverage}x for {symbol} (fallback)")
-                    return True
-                
-                msg = str(data.get('msg', data.get('message', ''))).lower()
-                if "already" in msg or "no change" in msg:
-                    return True
-                    
-                logger.warning(f"⚠️ Fallback leverage response: {data}")
-                return False
-            
-            logger.warning(f"⚠️ Fallback leverage failed: {response.status_code}")
-            return False
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Fallback leverage exception: {str(e)}")
-            return False
     
     def has_open_position(self, symbol: str) -> bool:
         # 1. Clean symbol using the clean_symbol method for consistency
