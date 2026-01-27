@@ -559,14 +559,15 @@ class WEEXv2Client:
             
             if response.status_code == 200:
                 data = response.json()
-                # Handle both formats: dict with 'collateral' key or direct list
+                # Handle both formats: dict with 'data' or 'collateral' key, or direct list
                 # Log which format is received for monitoring
                 if isinstance(data, list):
                     logger.debug("Account balance response is a list (direct format)")
                     collateral_list = data
                 else:
                     logger.debug("Account balance response is a dict (nested format)")
-                    collateral_list = data.get('collateral', [])
+                    # V2 API may use 'data' key for the list
+                    collateral_list = data.get('data', data.get('collateral', []))
                 
                 if collateral_list:
                     for item in collateral_list:
@@ -715,22 +716,21 @@ class WEEXv2Client:
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
             """
             Sets the leverage for a specific symbol.
-            Uses V2 settings endpoint: /capi/v2/account/settings
-            Falls back to /capi/v2/account/setLeverage on 404
+            Uses V2 endpoint: /capi/v2/account/setLeverage
             
-            Note: margin_mode parameter is kept for API compatibility but always uses Cross mode (2)
-            as required by competition rules.
+            Note: margin_mode parameter is kept for API compatibility but always uses isolated mode
+            as required by WEEX V2 API.
             """
             # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
             clean_symbol = self.clean_symbol(symbol)
             
-            # Primary endpoint: /capi/v2/account/settings
-            path = "/capi/v2/account/settings"
+            # Primary endpoint: /capi/v2/account/setLeverage (POST)
+            path = "/capi/v2/account/setLeverage"
             
             body = {
                 "symbol": clean_symbol,
-                "leverage": int(leverage),
-                "marginMode": 2  # Always use Cross mode (2) as required by competition rules
+                "leverage": str(leverage),  # WEEX V2 API requires string format
+                "marginMode": "isolated"    # WEEX V2 API requires string format
             }
             
             try:
@@ -749,11 +749,6 @@ class WEEXv2Client:
                         
                     logger.warning(f"⚠️ Leverage API response {symbol}: {data}")
                     return False
-                
-                # If 404, try the fallback path /capi/v2/account/setLeverage
-                if response.status_code == 404:
-                    logger.warning(f"⚠️ Endpoint {path} not found (404). Trying fallback path /capi/v2/account/setLeverage...")
-                    return self._set_leverage_fallback(symbol, leverage)
                     
                 logger.warning(f"⚠️ Leverage Status {response.status_code}: {response.text}")
                 return False

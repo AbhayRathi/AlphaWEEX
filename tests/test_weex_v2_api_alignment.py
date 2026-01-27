@@ -89,8 +89,8 @@ class TestSetLeverage:
         # Check the body contains cleaned symbol (BTCUSDT, not cmt_btcusdt)
         body = call_args[1]['body']
         assert body['symbol'] == "BTCUSDT"
-        assert body['leverage'] == 20
-        assert body['marginMode'] == 2
+        assert body['leverage'] == "20"  # WEEX V2 API requires string format
+        assert body['marginMode'] == "isolated"  # WEEX V2 API requires string format
         assert result is True
     
     @patch.object(WEEXv2Client, 'send_weex_request')
@@ -110,11 +110,11 @@ class TestSetLeverage:
         # Verify correct path is used
         call_args = mock_send_request.call_args
         path = call_args[0][1]  # Second positional argument
-        assert path == "/capi/v2/account/settings"
+        assert path == "/capi/v2/account/setLeverage"
     
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_set_leverage_integer_types(self, mock_send_request):
-        """Test that leverage and marginMode are integers"""
+    def test_set_leverage_string_types(self, mock_send_request):
+        """Test that leverage and marginMode are strings as required by WEEX V2 API"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock successful response
@@ -126,11 +126,11 @@ class TestSetLeverage:
         # Call with various types
         client.set_leverage("cmt_btcusdt", leverage=20)
         
-        # Check body contains integers
+        # Check body contains strings as required by WEEX V2 API
         body = mock_send_request.call_args[1]['body']
-        assert isinstance(body['leverage'], int)
-        assert isinstance(body['marginMode'], int)
-        assert body['marginMode'] == 2
+        assert isinstance(body['leverage'], str)
+        assert isinstance(body['marginMode'], str)
+        assert body['marginMode'] == "isolated"
 
 
 class TestHasOpenPosition:
