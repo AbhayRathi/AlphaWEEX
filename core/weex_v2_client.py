@@ -721,7 +721,8 @@ class WEEXv2Client:
             Args:
                 symbol: Trading symbol (e.g., "cmt_btcusdt" or "BTCUSDT")
                 leverage: Leverage multiplier (will be converted to string for API)
-                margin_mode: Kept for API compatibility but always uses "isolated" as required by WEEX V2 API
+                margin_mode: DEPRECATED - Parameter kept for backward compatibility but is ignored. 
+                            Always uses "isolated" as required by WEEX V2 API.
             
             Returns:
                 bool: True if leverage was set successfully, False otherwise
