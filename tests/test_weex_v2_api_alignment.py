@@ -400,17 +400,17 @@ class TestGetAccountAssets:
         # Call method
         result = client.get_account_assets()
         
-        # Verify correct endpoint was called
+        # Verify correct endpoint was called (Alpha-Evo Final: getAccounts with capital 'A')
         call_args = mock_send_request.call_args
         assert call_args[0][0] == "GET"
-        assert call_args[0][1] == "/capi/v2/account/assets"
+        assert call_args[0][1] == "/capi/v2/account/getAccounts"
         
         # Verify correct value returned (equity for USDT)
         assert result == 887.61
     
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_get_account_assets_fallback_to_available(self, mock_send_request):
-        """Test get_account_assets falls back to available when equity is missing"""
+    def test_get_account_assets_missing_equity(self, mock_send_request):
+        """Test get_account_assets returns 0.0 when equity is missing (Alpha-Evo Final: no fallback)"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         # Mock V2 response without equity field
@@ -430,8 +430,8 @@ class TestGetAccountAssets:
         # Call method
         result = client.get_account_assets()
         
-        # Verify fallback to available
-        assert result == 750.25
+        # Verify returns 0.0 when equity is missing (no fallback to available)
+        assert result == 0.0
     
     @patch.object(WEEXv2Client, 'send_weex_request')
     def test_get_account_assets_no_usdt(self, mock_send_request):
