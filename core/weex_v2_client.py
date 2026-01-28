@@ -219,6 +219,7 @@ class WEEXv2Client:
         
         Alpha-Evo V3: Implements Exponential Backoff for 521 errors
         AI Wars: Adds 1.5s delay between all API calls to avoid firewall
+        Alpha-Evo Final: Adds 405 error handling with 60s retry backoff
         """
         # AI Wars: Add delay to avoid triggering firewall
         time.sleep(1.5)
@@ -280,11 +281,13 @@ class WEEXv2Client:
                     # Send the EXACT body_str used for the signature
                     response = self.session.post(url, headers=headers, data=body_str, timeout=30)
                 
-                # AI Wars: Handle both 521 and 403 firewall errors
-                if response.status_code in [521, 403]:
-                    # Alpha-Evo V3: Exponential Backoff
+                # Alpha-Evo Final: Handle 405, 521, and 403 errors with backoff
+                # 405 = Method Not Allowed (API error), 521/403 = Cloudflare/firewall blocks
+                if response.status_code in [405, 521, 403]:
+                    # Alpha-Evo V3: Exponential Backoff with 60s minimum
                     backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    logger.error(f"🔥 {response.status_code} Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
+                    error_type = "Method Not Allowed" if response.status_code == 405 else "Firewall/Rate Limit"
+                    logger.error(f"🔥 {response.status_code} Error ({error_type})! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
                     self.last_521_error_time = time.time()
                     self.cooldown_seconds = backoff_time
                     
@@ -292,14 +295,14 @@ class WEEXv2Client:
                         time.sleep(backoff_time)
                         continue  # Retry
                     else:
-                        raise Exception(f"{response.status_code} Firewall Error - Max retries ({max_retries}) exceeded")
+                        raise Exception(f"{response.status_code} Error ({error_type}) - Max retries ({max_retries}) exceeded")
                     
                 # Success - reset cooldown to base
                 self.cooldown_seconds = 60
                 return response
                 
             except Exception as e:
-                if ("521" not in str(e) and "403" not in str(e)) or retry >= max_retries - 1:
+                if ("405" not in str(e) and "521" not in str(e) and "403" not in str(e)) or retry >= max_retries - 1:
                     logger.error(f"❌ Request failed: {str(e)}")
                     raise
                 # For firewall errors, continue to retry
@@ -689,26 +692,28 @@ class WEEXv2Client:
     def get_account_assets(self) -> float:
         """
         Get account USDT balance from WEEX V2 Contract API.
-        This method specifically uses the /capi/v2/account/assets endpoint
-        to retrieve asset data in the V2 response format.
+        This method specifically uses the /capi/v2/account/getAccounts endpoint
+        to retrieve asset data in the V2 response format (Futures Vault).
+        
+        Alpha-Evo Final: Fixed to use getAccounts (capital 'A') and extract 'equity'
         
         Returns:
             float: USDT equity (total value including unrealized PnL), or 0.0 if not found
         """
         try:
-            # This call must use the /capi/ (Contract) path
-            res = self.send_weex_request("GET", "/capi/v2/account/assets")
+            # This must be the CONTRACT endpoint - getAccounts with capital 'A'
+            res = self.send_weex_request("GET", "/capi/v2/account/getAccounts")
             
             if res and res.status_code == 200:
                 response_data = res.json()
                 if response_data.get("code") == "00000":
                     data = response_data.get("data", [])
-                    # Iterate through the wallet list to find your USDT
-                    for asset in data:
-                        if asset.get("coinName") == "USDT":
-                            # V2 uses 'equity' for the total value including unrealized PnL
-                            val = asset.get("equity", asset.get("available", 0.0))
-                            return float(val)
+                    # Iterate to find the USDT entry in your Futures wallet
+                    for account in data:
+                        if account.get("coinName") == "USDT":
+                            # V2 stores total value in 'equity'
+                            equity = float(account.get("equity", 0.0))
+                            return equity
             return 0.0
         except Exception as e:
             logger.error(f"Failed to get account assets: {str(e)}")
