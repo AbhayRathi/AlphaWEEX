@@ -213,17 +213,14 @@ class WEEXv2Client:
         return base64.b64encode(signature).decode()
         
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
-                            body: Union[Dict, str, None] = None, symbol: str = None) -> requests.Response:
+                            body: Union[Dict, str, None] = None) -> requests.Response:
         """
         Send authenticated request to WEEX API using compact JSON for signatures.
         
         Alpha-Evo V3: Implements Exponential Backoff for 521 errors
         AI Wars: Adds 1.5s delay between all API calls to avoid firewall
-        Alpha-Evo Final: Global symbol sanitizer for all requests
+        Alpha-Evo Final: Adds 405 error handling with 60s retry backoff
         """
-        # Global symbol sanitizer - clean symbol at the very top
-        symbol = symbol.replace('cmt_', '').upper() if symbol else None
-        
         # AI Wars: Add delay to avoid triggering firewall
         time.sleep(1.5)
         
@@ -284,11 +281,13 @@ class WEEXv2Client:
                     # Send the EXACT body_str used for the signature
                     response = self.session.post(url, headers=headers, data=body_str, timeout=30)
                 
-                # Alpha-Evo Final: Handle 405, 521, and 403 firewall errors
+                # Alpha-Evo Final: Handle 405, 521, and 403 errors with backoff
+                # 405 = Method Not Allowed (API error), 521/403 = Cloudflare/firewall blocks
                 if response.status_code in [405, 521, 403]:
                     # Alpha-Evo V3: Exponential Backoff with 60s minimum
                     backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    logger.error(f"🔥 {response.status_code} Error: Firewall block! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
+                    error_type = "Method Not Allowed" if response.status_code == 405 else "Firewall/Rate Limit"
+                    logger.error(f"🔥 {response.status_code} Error ({error_type})! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
                     self.last_521_error_time = time.time()
                     self.cooldown_seconds = backoff_time
                     
@@ -296,7 +295,7 @@ class WEEXv2Client:
                         time.sleep(backoff_time)
                         continue  # Retry
                     else:
-                        raise Exception(f"{response.status_code} Firewall Error - Max retries ({max_retries}) exceeded")
+                        raise Exception(f"{response.status_code} Error ({error_type}) - Max retries ({max_retries}) exceeded")
                     
                 # Success - reset cooldown to base
                 self.cooldown_seconds = 60
