@@ -156,11 +156,14 @@ class WEEXv2Client:
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
-        Clean symbol for API calls: remove 'cmt_' prefix and convert to UPPERCASE
+        Clean symbol for API calls: remove 'cmt_' prefix (case-insensitive) and convert to UPPERCASE
+        Alpha-Evo Final: Enhanced to handle CMT_ in any case
         """
         if not symbol:
             return ""
-        return symbol.replace('cmt_', '').upper()
+        # Remove cmt_ prefix (case-insensitive) and convert to uppercase
+        cleaned = symbol.lower().replace('cmt_', '').upper()
+        return cleaned
     
     def round_qty(self, symbol: str, qty: float) -> float:
         """
