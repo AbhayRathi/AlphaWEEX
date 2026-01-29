@@ -53,15 +53,16 @@ LLM_BASE_URL = os.getenv('LLM_BASE_URL')  # For DeepSeek: https://api.deepseek.c
 
 # Multi-Symbol Support
 # Updated Competition Symbol List (8 Pairs)
+# Alpha-Evo Final: Removed cmt_ prefix and converted to uppercase for WEEX V2 2026 specs
 SYMBOL_LIST = [
-    "cmt_btcusdt",   # Bitcoin
-    "cmt_ethusdt",   # Ethereum
-    "cmt_solusdt",   # Solana
-    "cmt_ltcusdt",   # Litecoin
-    "cmt_adausdt",   # Cardano
-    "cmt_dogeusdt",  # Dogecoin
-    "cmt_xrpusdt",   # XRP
-    "cmt_bnbusdt"    # Binance Coin
+    "BTCUSDT",   # Bitcoin
+    "ETHUSDT",   # Ethereum
+    "SOLUSDT",   # Solana
+    "LTCUSDT",   # Litecoin
+    "ADAUSDT",   # Cardano
+    "DOGEUSDT",  # Dogecoin
+    "XRPUSDT",   # XRP
+    "BNBUSDT"    # Binance Coin
 ]
 
 # Risk Management
@@ -112,7 +113,7 @@ TRAILING_ACTIVATION_PCT = 4.0  # Activate 1% trailing stop at +4% profit
 
 # Volume & Liquidity Bypass Settings
 VOLUME_THRESHOLD_MULTIPLIER = 0.05  # Volume threshold for liquidity check (lowered from 0.12)
-VOLUME_BYPASS_LIST = ['cmt_btcusdt', 'cmt_ethusdt', 'cmt_bnbusdt']  # Symbols that bypass volume check
+VOLUME_BYPASS_LIST = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']  # Symbols that bypass volume check (Alpha-Evo Final: uppercase)
 TRAILING_STOP_DISTANCE_PCT = 1.0  # 1% trailing distance from peak
 
 
