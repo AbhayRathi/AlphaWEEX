@@ -590,8 +590,8 @@ class CompetitionTradingBot:
                 has_pos = False
                 try:
                     has_pos = self.client.has_open_position(symbol)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"has_open_position check failed for {symbol}, using fallback: {e}")
                 
                 # If has_open_position returns False, also check if position exists in dict (for test compatibility)
                 if not has_pos:
