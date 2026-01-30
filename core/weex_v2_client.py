@@ -44,10 +44,6 @@ class WEEXv2Client:
     INITIAL_SL_SHORT_PCT = 0.40  # Initial stop loss for shorts (0.40% - tighter)
     BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
     
-    # Emergency startup balance - used if first balance check returns 0.0
-    # Based on last known good balance from production logs
-    EMERGENCY_STARTUP_BALANCE = 719.0
-    
     def __init__(self, api_key: str, api_secret: str, api_password: str):
         """
         Initialize WEEX v2 Client
@@ -160,11 +156,13 @@ class WEEXv2Client:
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
-        Clean symbol for API calls: remove 'cmt_' prefix and convert to UPPERCASE
+        Clean symbol for API calls: remove 'cmt_' prefix (case-insensitive) and convert to UPPERCASE
         """
         if not symbol:
             return ""
-        return symbol.replace('cmt_', '').upper()
+        # Remove cmt_ prefix (case-insensitive) and convert to uppercase
+        cleaned = symbol.lower().replace('cmt_', '').upper()
+        return cleaned
     
     def round_qty(self, symbol: str, qty: float) -> float:
         """
@@ -967,7 +965,8 @@ class WEEXv2Client:
         """
         Alpha-Apex: Check multi-tier profit targets and dynamic stop loss
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        # Alpha-Evo Final: Use clean_symbol helper for consistency
+        symbol = self.clean_symbol(symbol)
         if symbol not in self.open_positions:
             return None
         
@@ -1112,7 +1111,8 @@ class WEEXv2Client:
         """
         Close an open position (market order)
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        # Alpha-Evo Final: Use clean_symbol helper instead of inline replace
+        symbol = self.clean_symbol(symbol)
         if symbol not in self.open_positions:
             logger.warning(f"⚠️ No position to close for {symbol}")
             return False
@@ -1130,14 +1130,11 @@ class WEEXv2Client:
             if symbol in self.position_scaling_state:
                 del self.position_scaling_state[symbol]
             
-            # AI Wars: Remove from active tracking
-            symbol_lower = symbol.lower()
-            if not symbol_lower.startswith('cmt_'):
-                symbol_lower = f'cmt_{symbol_lower}'
-            
-            self.active_symbols.discard(symbol_lower)
-            if symbol_lower in self.active_order_ids:
-                del self.active_order_ids[symbol_lower]
+            # AI Wars: Remove from active tracking (use internal symbol format: lowercase)
+            symbol_internal = symbol.lower()
+            self.active_symbols.discard(symbol_internal)
+            if symbol_internal in self.active_order_ids:
+                del self.active_order_ids[symbol_internal]
             
             # AI Wars Audit: Save state after closing position
             self._save_state_to_file()
@@ -1202,7 +1199,8 @@ class WEEXv2Client:
         """
         Alpha-Apex: Close a partial position (e.g., 50% at first target)
         """
-        symbol = symbol.replace('cmt_', '').upper()
+        # Alpha-Evo Final: Use clean_symbol helper for consistency
+        symbol = self.clean_symbol(symbol)
         if symbol not in self.open_positions:
             return None
         
