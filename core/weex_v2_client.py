@@ -727,7 +727,9 @@ class WEEXv2Client:
                         accounts_list = response_data.get("data", [])
                         logger.debug("Response format: dict with 'data' key")
                     else:
-                        logger.error(f"API returned error code: {response_data.get('code')}")
+                        error_code = response_data.get('code')
+                        error_msg = response_data.get('msg', 'No error message provided')
+                        logger.error(f"API returned error code: {error_code}, message: {error_msg}")
                         return 0.0
                 
                 # Parse USDT equity from accounts

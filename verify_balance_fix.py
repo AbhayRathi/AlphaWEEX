@@ -22,14 +22,18 @@ def load_credentials():
         print("❌ ERROR: config.json not found")
         sys.exit(1)
     
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    
-    return (
-        config['weex']['api_key'],
-        config['weex']['api_secret'],
-        config['weex']['passphrase']
-    )
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        return (
+            config['weex']['api_key'],
+            config['weex']['api_secret'],
+            config['weex']['passphrase']
+        )
+    except KeyError as e:
+        print(f"❌ ERROR: Missing required WEEX configuration in config.json: {e}")
+        sys.exit(1)
 
 def main():
     print("="*60)
@@ -66,7 +70,7 @@ def main():
     try:
         balance = client.get_account_balance()
         if balance:
-            total_equity = balance.get('totalEquity') or balance.get('equity', 0)
+            total_equity = balance.get('totalEquity') if balance.get('totalEquity') is not None else balance.get('equity', 0)
             print(f"✅ SUCCESS: Balance = {balance}")
             print(f"   Total Equity = ${float(total_equity):.2f}")
         else:
