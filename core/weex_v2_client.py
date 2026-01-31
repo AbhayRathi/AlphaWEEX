@@ -284,7 +284,12 @@ class WEEXv2Client:
                 if response.status_code in [405, 521, 403]:
                     # Alpha-Evo V3: Exponential Backoff with 60s minimum
                     backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    error_type = "Method Not Allowed" if response.status_code == 405 else "Firewall/Rate Limit"
+                    if response.status_code == 521:
+                        error_type = "Cloudflare/Origin Connection Error"
+                    elif response.status_code == 403:
+                        error_type = "Firewall/Rate Limit"
+                    else:
+                        error_type = "Method Not Allowed"
                     logger.error(f"🔥 {response.status_code} Error ({error_type})! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
                     self.last_521_error_time = time.time()
                     self.cooldown_seconds = backoff_time
@@ -293,7 +298,7 @@ class WEEXv2Client:
                         time.sleep(backoff_time)
                         continue  # Retry
                     else:
-                        raise Exception(f"{response.status_code} Error ({error_type}) - Max retries ({max_retries}) exceeded")
+                        raise ConnectionError(f"{response.status_code} {error_type} - Max retries ({max_retries}) exceeded. Please check your IP whitelist and network connectivity.")
                     
                 # Success - reset cooldown to base
                 self.cooldown_seconds = 60
@@ -568,7 +573,7 @@ class WEEXv2Client:
             Account balance data or None
         """
         try:
-            path = "/capi/v2/account/accounts?productType=umcbl"
+            path = "/capi/v2/account/getAccounts"
             response = self.send_weex_request("GET", path)
             
             if response.status_code == 200:
@@ -658,16 +663,23 @@ class WEEXv2Client:
                     logger.warning(f"🛑 No collateral data found. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                
+                logger.error(f"❌ No balance data found after {retry_count} retries (max: {max_retries})")
                 return None
                 
-            # Handle 521 errors - should be handled by send_weex_request, but add extra safety
+            # Handle 521/403 errors - should be handled by send_weex_request, but add extra safety
             if response.status_code in [521, 403]:
                 if retry_count < max_retries:
                     logger.warning(f"🛑 Firewall active ({response.status_code}). Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                
+                raise ConnectionError(f"Failed to retrieve balance after {max_retries} retries due to {response.status_code} error. Please check your IP whitelist and network connectivity.")
                     
-            return None
+            # Handle other non-200 status codes
+            if response.status_code != 200:
+                raise ConnectionError(f"Failed to retrieve balance: HTTP {response.status_code}. Response: {response.text}")
+            
         except Exception as e:
             # Check if this is a 521/403 firewall error that escaped send_weex_request
             # These specific error patterns are raised by send_weex_request
@@ -693,13 +705,11 @@ class WEEXv2Client:
         This method specifically uses the /capi/v2/account/getAccounts endpoint
         to retrieve asset data in the V2 response format (Futures Vault).
         
-        Alpha-Evo Final: Fixed to use getAccounts (capital 'A') and extract 'equity'
-        
         Returns:
             float: USDT equity (total value including unrealized PnL), or 0.0 if not found
         """
         try:
-            # This must be the CONTRACT endpoint - getAccounts with capital 'A'
+            # Use the official WEEX V2 Contract API endpoint
             res = self.send_weex_request("GET", "/capi/v2/account/getAccounts")
             
             if res and res.status_code == 200:

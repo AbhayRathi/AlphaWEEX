@@ -400,7 +400,7 @@ class TestGetAccountAssets:
         # Call method
         result = client.get_account_assets()
         
-        # Verify correct endpoint was called (Alpha-Evo Final: getAccounts with capital 'A')
+        # Verify correct endpoint was called (Official WEEX V2 Contract API)
         call_args = mock_send_request.call_args
         assert call_args[0][0] == "GET"
         assert call_args[0][1] == "/capi/v2/account/getAccounts"
