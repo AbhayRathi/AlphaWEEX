@@ -664,7 +664,7 @@ class WEEXv2Client:
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
                 
-                logger.error(f"❌ No balance data found after {max_retries} retries")
+                logger.error(f"❌ No balance data found after {retry_count} retries (max: {max_retries})")
                 return None
                 
             # Handle 521/403 errors - should be handled by send_weex_request, but add extra safety
