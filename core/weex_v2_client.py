@@ -573,7 +573,7 @@ class WEEXv2Client:
             Account balance data or None
         """
         try:
-            path = "/capi/v2/account/assets"
+            path = "/capi/v2/account/getAccounts"
             response = self.send_weex_request("GET", path)
             
             if response.status_code == 200:
@@ -702,15 +702,15 @@ class WEEXv2Client:
     def get_account_assets(self) -> float:
         """
         Get account USDT balance from WEEX V2 Contract API.
-        This method specifically uses the /capi/v2/account/assets endpoint
+        This method specifically uses the /capi/v2/account/getAccounts endpoint
         to retrieve asset data in the V2 response format (Futures Vault).
         
         Returns:
             float: USDT equity (total value including unrealized PnL), or 0.0 if not found
         """
         try:
-            # Use the verified /capi/v2/account/assets endpoint
-            res = self.send_weex_request("GET", "/capi/v2/account/assets")
+            # Use the official WEEX V2 Contract API endpoint
+            res = self.send_weex_request("GET", "/capi/v2/account/getAccounts")
             
             if res and res.status_code == 200:
                 response_data = res.json()

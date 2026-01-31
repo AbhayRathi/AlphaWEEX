@@ -2,7 +2,7 @@
 """
 Verification script to test the WEEX API balance endpoint fix.
 This script verifies that the updated WeexClient can successfully fetch balances
-using the /capi/v2/account/assets endpoint.
+using the /capi/v2/account/getAccounts endpoint (official WEEX V2 Contract API).
 """
 import os
 import sys
@@ -41,10 +41,10 @@ def verify_balance_fix():
         print(f"❌ Failed to initialize client: {e}")
         return False
     
-    # Test 1: get_account_balance (using /capi/v2/account/assets)
+    # Test 1: get_account_balance (using /capi/v2/account/getAccounts)
     print("\n" + "-" * 60)
     print("Test 1: Fetching balance using get_account_balance()")
-    print(f"Endpoint: /capi/v2/account/assets")
+    print(f"Endpoint: /capi/v2/account/getAccounts")
     print("-" * 60)
     
     try:
@@ -82,10 +82,10 @@ def verify_balance_fix():
         traceback.print_exc()
         return False
     
-    # Test 2: get_account_assets (also using /capi/v2/account/assets)
+    # Test 2: get_account_assets (also using /capi/v2/account/getAccounts)
     print("\n" + "-" * 60)
     print("Test 2: Fetching balance using get_account_assets()")
-    print(f"Endpoint: /capi/v2/account/assets")
+    print(f"Endpoint: /capi/v2/account/getAccounts")
     print("-" * 60)
     
     try:
