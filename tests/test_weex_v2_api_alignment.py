@@ -491,6 +491,60 @@ class TestGetAccountAssets:
         
         # Verify returns 0.0 on exception
         assert result == 0.0
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_list_response(self, mock_send_request):
+        """Test get_account_assets with direct list response format"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock direct list response format (no dict wrapper)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "coinName": "BTC",
+                "equity": "0.5",
+                "available": "0.4"
+            },
+            {
+                "coinName": "USDT",
+                "equity": "1250.75",
+                "available": "900.00"
+            }
+        ]
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify correct value returned (equity for USDT)
+        assert result == 1250.75
+    
+    @patch.object(WEEXv2Client, 'send_weex_request')
+    def test_get_account_assets_list_response_no_usdt(self, mock_send_request):
+        """Test get_account_assets returns 0.0 when list response has no USDT"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock direct list response without USDT
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = [
+            {
+                "coinName": "BTC",
+                "equity": "0.5"
+            },
+            {
+                "coinName": "ETH",
+                "equity": "10.0"
+            }
+        ]
+        mock_send_request.return_value = mock_response
+        
+        # Call method
+        result = client.get_account_assets()
+        
+        # Verify returns 0.0 when USDT not found
+        assert result == 0.0
 
 
 if __name__ == "__main__":

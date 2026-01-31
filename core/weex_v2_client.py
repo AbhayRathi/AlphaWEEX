@@ -714,14 +714,28 @@ class WEEXv2Client:
             
             if res and res.status_code == 200:
                 response_data = res.json()
-                if response_data.get("code") == "00000":
-                    data = response_data.get("data", [])
-                    # Iterate to find the USDT entry in your Futures wallet
-                    for account in data:
-                        if account.get("coinName") == "USDT":
-                            # V2 stores total value in 'equity'
-                            equity = float(account.get("equity", 0.0))
-                            return equity
+                
+                # Handle both response formats: raw list or dict with "data" key
+                accounts_list = []
+                if isinstance(response_data, list):
+                    # Direct list response: [{...}, {...}]
+                    accounts_list = response_data
+                    logger.debug("Response format: raw list")
+                elif isinstance(response_data, dict):
+                    # Dict response: {"code": "00000", "data": [{...}]}
+                    if response_data.get("code") == "00000":
+                        accounts_list = response_data.get("data", [])
+                        logger.debug("Response format: dict with 'data' key")
+                    else:
+                        logger.error(f"API returned error code: {response_data.get('code')}")
+                        return 0.0
+                
+                # Parse USDT equity from accounts
+                for account in accounts_list:
+                    if account.get("coinName") == "USDT":
+                        equity = float(account.get("equity", 0.0))
+                        logger.info(f"💰 USDT Equity: ${equity:.2f}")
+                        return equity
             return 0.0
         except Exception as e:
             logger.error(f"Failed to get account assets: {str(e)}")
