@@ -663,21 +663,25 @@ class WEEXv2Client:
                     logger.warning(f"🛑 No collateral data found. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                
+                logger.error("❌ No balance data found after retries")
                 return None
                 
-            # Handle 521 errors - should be handled by send_weex_request, but add extra safety
+            # Handle 521/403 errors - should be handled by send_weex_request, but add extra safety
             if response.status_code in [521, 403]:
                 if retry_count < max_retries:
                     logger.warning(f"🛑 Firewall active ({response.status_code}). Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
-                else:
-                    raise ConnectionError(f"Failed to retrieve balance after {max_retries} retries due to {response.status_code} error. Please check your IP whitelist and network connectivity.")
+                
+                raise ConnectionError(f"Failed to retrieve balance after {max_retries} retries due to {response.status_code} error. Please check your IP whitelist and network connectivity.")
                     
             # Handle other non-200 status codes
             if response.status_code != 200:
                 raise ConnectionError(f"Failed to retrieve balance: HTTP {response.status_code}. Response: {response.text}")
             
+            # If we reach here, it means 200 status but no valid data found
+            logger.error("❌ Received 200 status but no valid balance data")
             return None
         except Exception as e:
             # Check if this is a 521/403 firewall error that escaped send_weex_request
