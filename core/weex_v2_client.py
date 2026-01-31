@@ -664,7 +664,7 @@ class WEEXv2Client:
                     time.sleep(60)
                     return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
                 
-                logger.error("❌ No balance data found after retries")
+                logger.error(f"❌ No balance data found after {max_retries} retries")
                 return None
                 
             # Handle 521/403 errors - should be handled by send_weex_request, but add extra safety
@@ -680,9 +680,6 @@ class WEEXv2Client:
             if response.status_code != 200:
                 raise ConnectionError(f"Failed to retrieve balance: HTTP {response.status_code}. Response: {response.text}")
             
-            # If we reach here, it means 200 status but no valid data found
-            logger.error("❌ Received 200 status but no valid balance data")
-            return None
         except Exception as e:
             # Check if this is a 521/403 firewall error that escaped send_weex_request
             # These specific error patterns are raised by send_weex_request
