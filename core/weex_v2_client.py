@@ -1194,7 +1194,11 @@ class WEEXv2Client:
                                 available = 0.0
                             
                             # Optional conservative haircut (default 1.0 = no haircut)
-                            haircut = float(os.getenv("WEEX_AVAILABLE_FALLBACK_HAIRCUT", "1.0"))
+                            try:
+                                haircut = float(os.getenv("WEEX_AVAILABLE_FALLBACK_HAIRCUT", "1.0"))
+                            except (TypeError, ValueError):
+                                logger.warning("⚠️ Invalid WEEX_AVAILABLE_FALLBACK_HAIRCUT value, defaulting to 1.0")
+                                haircut = 1.0
                             available = max(0.0, available * haircut)
                             
                             # AI Wars: Log both Equity and Available (with corrected fallback value)

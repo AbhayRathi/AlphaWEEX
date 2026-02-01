@@ -404,6 +404,25 @@ class CompetitionTradingBot:
             logger.error(f"Failed to get equity: {str(e)}")
             return 1000.0
     
+    def get_effective_available(self) -> float:
+        """
+        Get effective available balance for trade sizing/gating.
+        
+        Uses liquid_capital if > 0, else available. This prevents blocking trades
+        solely because pending-orders route is cooling down.
+        
+        Returns:
+            Effective available balance for trading
+        """
+        try:
+            balance = self.client.get_account_balance() or {}
+            available = float(balance.get("available", 0.0))
+            liquid_capital = float(balance.get("liquidCapital", 0.0))
+            return liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+        except Exception as e:
+            logger.error(f"Failed to get effective available: {str(e)}")
+            return 0.0
+    
     def save_position_state(self) -> None:
         """
         Save position scaling state to disk for persistence
@@ -1693,13 +1712,8 @@ class CompetitionTradingBot:
                     logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
                     return
                 
-                # Effective Available Gating: Use liquid_capital if > 0, else available
-                # This prevents blocking trades solely because pending-orders route is cooling
-                balance = self.client.get_account_balance() or {}
-                available = float(balance.get("available", 0.0))
-                liquid_capital = float(balance.get("liquidCapital", 0.0))
-                effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
-                
+                # Effective Available Gating: Use helper method for consistent logic
+                effective_available = self.get_effective_available()
                 if effective_available <= 0.0:
                     logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
                     return
@@ -1857,13 +1871,8 @@ class CompetitionTradingBot:
                         logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
                         return
                     
-                    # Effective Available Gating: Use liquid_capital if > 0, else available
-                    # This prevents blocking trades solely because pending-orders route is cooling
-                    balance = self.client.get_account_balance() or {}
-                    available = float(balance.get("available", 0.0))
-                    liquid_capital = float(balance.get("liquidCapital", 0.0))
-                    effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
-                    
+                    # Effective Available Gating: Use helper method for consistent logic
+                    effective_available = self.get_effective_available()
                     if effective_available <= 0.0:
                         logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
                         return

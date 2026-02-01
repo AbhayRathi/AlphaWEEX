@@ -653,10 +653,8 @@ class TestWEEXv2Client:
         }
         
         with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
-            # Calculate effective_available as the bot would
-            available = float(mock_balance.get("available", 0.0))
-            liquid_capital = float(mock_balance.get("liquidCapital", 0.0))
-            effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+            # Use the actual helper method from the bot
+            effective_available = bot.get_effective_available()
             
             # effective_available should be 500 (from available), NOT 0 (from liquidCapital)
             assert effective_available == 500.0, f"Expected effective_available=500.0, got {effective_available}"
@@ -680,10 +678,8 @@ class TestWEEXv2Client:
         }
         
         with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
-            # Calculate effective_available as the bot would
-            available = float(mock_balance.get("available", 0.0))
-            liquid_capital = float(mock_balance.get("liquidCapital", 0.0))
-            effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+            # Use the actual helper method from the bot
+            effective_available = bot.get_effective_available()
             
             # effective_available should be 350 (from liquidCapital, not available)
             assert effective_available == 350.0, f"Expected effective_available=350.0 (liquid_capital), got {effective_available}"
