@@ -148,8 +148,48 @@ class WEEXv2Client:
         self._contract_map_timestamp: float = 0
         self._contract_map_ttl: int = 3600  # Cache for 60 minutes
         
+        # Symbol format cache: (path_base, internal_symbol) -> ("contract" | "cmt" | "plain")
+        # TTL ~60 minutes for cached format
+        from typing import Tuple
+        self._symbol_format_cache: Dict[Tuple[str, str], str] = {}
+        self._symbol_format_cache_timestamp: Dict[Tuple[str, str], float] = {}
+        self._symbol_format_cache_ttl: int = 3600  # 60 minutes
+        
+        # Load symbol format hint from environment for CI/testing
+        self._load_symbol_format_hint()
+        
         # AI Wars Audit: Load persisted state if exists
         self._load_state_from_file()
+    
+    def _load_symbol_format_hint(self) -> None:
+        """
+        Load symbol format hints from WEEX_SYMBOL_FORMAT_HINT environment variable.
+        
+        Supports JSON in formats:
+        - Single hint: {"path":"/capi/v2/order/placeOrder","symbol":"BTCUSDT","format":"cmt"}
+        - Array of hints: [{"path":"/capi/v2/order/placeOrder","symbol":"BTCUSDT","format":"cmt"}]
+        """
+        hint_env = os.getenv("WEEX_SYMBOL_FORMAT_HINT", "")
+        if not hint_env:
+            return
+        
+        try:
+            hint_data = json.loads(hint_env)
+            hints = hint_data if isinstance(hint_data, list) else [hint_data]
+            
+            now = time.time()
+            for hint in hints:
+                path = hint.get("path", "")
+                symbol = hint.get("symbol", "").upper()
+                fmt = hint.get("format", "")
+                
+                if path and symbol and fmt in ("contract", "cmt", "plain"):
+                    cache_key = (path, symbol)
+                    self._symbol_format_cache[cache_key] = fmt
+                    self._symbol_format_cache_timestamp[cache_key] = now
+                    logger.info(f"✅ Loaded symbol format hint: {path} + {symbol} → {fmt}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"⚠️ Failed to parse WEEX_SYMBOL_FORMAT_HINT: {e}")
     
     def _load_state_from_file(self) -> None:
         """
@@ -190,6 +230,100 @@ class WEEXv2Client:
         # Remove cmt_ prefix (case-insensitive) and convert to uppercase
         cleaned = symbol.lower().replace('cmt_', '').upper()
         return cleaned
+    
+    def _path_base(self, path: str) -> str:
+        """
+        Extract path base without query string.
+        
+        Args:
+            path: API endpoint path (may include query string)
+            
+        Returns:
+            Path without query string, e.g., "/capi/v2/order/placeOrder"
+        """
+        return path.split('?')[0]
+    
+    def _to_cmt(self, internal: str) -> str:
+        """
+        Convert internal symbol to legacy cmt_ format.
+        
+        Args:
+            internal: Internal symbol (e.g., BTCUSDT)
+            
+        Returns:
+            Legacy cmt format (e.g., cmt_btcusdt)
+        """
+        return f"cmt_{internal.lower()}"
+    
+    def _to_plain(self, internal: str) -> str:
+        """
+        Convert to plain uppercase format.
+        
+        Args:
+            internal: Internal symbol (e.g., btcusdt, cmt_btcusdt)
+            
+        Returns:
+            Plain uppercase (e.g., BTCUSDT)
+        """
+        return self.clean_symbol(internal)
+    
+    def _encode_symbol(self, internal: str, fmt: str) -> str:
+        """
+        Encode internal symbol to the specified format.
+        
+        Args:
+            internal: Internal symbol (e.g., BTCUSDT)
+            fmt: Format type - "contract", "cmt", or "plain"
+            
+        Returns:
+            Encoded symbol in the specified format
+        """
+        clean_internal = self.clean_symbol(internal)
+        if fmt == "contract":
+            return self.resolve_contract_symbol(clean_internal)
+        elif fmt == "cmt":
+            return self._to_cmt(clean_internal)
+        else:  # "plain"
+            return self._to_plain(clean_internal)
+    
+    def _get_cached_symbol_format(self, path_base: str, internal: str) -> Optional[str]:
+        """
+        Get cached symbol format for a path+symbol combination if still valid.
+        
+        Args:
+            path_base: API path without query string
+            internal: Internal symbol (uppercase)
+            
+        Returns:
+            Cached format ("contract", "cmt", "plain") or None if not cached/expired
+        """
+        cache_key = (path_base, internal.upper())
+        if cache_key not in self._symbol_format_cache:
+            return None
+        
+        # Check TTL
+        cached_time = self._symbol_format_cache_timestamp.get(cache_key, 0)
+        if time.time() - cached_time >= self._symbol_format_cache_ttl:
+            # Expired - remove from cache
+            self._symbol_format_cache.pop(cache_key, None)
+            self._symbol_format_cache_timestamp.pop(cache_key, None)
+            return None
+        
+        return self._symbol_format_cache[cache_key]
+    
+    def _set_cached_symbol_format(self, path_base: str, internal: str, fmt: str) -> None:
+        """
+        Cache a successful symbol format for a path+symbol combination.
+        
+        Args:
+            path_base: API path without query string
+            internal: Internal symbol (uppercase)
+            fmt: Format that worked ("contract", "cmt", "plain")
+        """
+        cache_key = (path_base, internal.upper())
+        self._symbol_format_cache[cache_key] = fmt
+        self._symbol_format_cache_timestamp[cache_key] = time.time()
+        logger.info(f"Cached symbol format: {path_base} + {internal} → {fmt}")
     
     def _extract_internal_key(self, contract: Dict[str, Any]) -> Optional[str]:
         """
@@ -466,9 +600,12 @@ class WEEXv2Client:
         
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
                             body: Union[Dict, str, None] = None, 
-                            timeout: tuple = (5, 15), max_retries: int = 3) -> requests.Response:
+                            timeout: tuple = (5, 15), max_retries: int = 3,
+                            _symbol_fallback_attempt: int = 0,
+                            _original_internal_symbol: Optional[str] = None) -> requests.Response:
         """
-        Send authenticated request to WEEX API with per-route(+symbol) cooldown.
+        Send authenticated request to WEEX API with per-route(+symbol) cooldown and
+        central symbol rewrite with 40020 fallback.
         
         Cloudflare 521 Hardening:
         - Per-route(+symbol) cooldown tracking
@@ -476,16 +613,26 @@ class WEEXv2Client:
         - Different handling for timeout errors (408, 522, 524)
         - Clears cooldown on successful 200 response
         
+        Symbol Handling (WEEX V2):
+        - Central symbol rewrite in payload and query before each request
+        - Auto-fallback on 40020 "Parameter symbol is invalid" errors:
+          attempt 0: contract symbol (resolve_contract_symbol)
+          attempt 1: cmt_ format (cmt_btcusdt)
+          attempt 2: plain uppercase (BTCUSDT)
+        - Caches successful format per path+symbol with 60 min TTL
+        
         Args:
             method: HTTP method (GET, POST)
             path: API endpoint path
             query_params: Query parameters string
             body: Request body (dict or string)
             timeout: Request timeout tuple (connect, read)
-            max_retries: Maximum number of retry attempts
+            max_retries: Maximum number of retry attempts for 521/timeout errors
+            _symbol_fallback_attempt: Internal use - current symbol format fallback attempt
+            _original_internal_symbol: Internal use - original internal symbol for fallback
             
         Returns:
-            requests.Response: Successful response
+            requests.Response: Response object
             
         Raises:
             Exception: If cooldown is active or max retries exceeded
@@ -493,6 +640,34 @@ class WEEXv2Client:
         # Prepare payload for cooldown key generation
         payload = body if isinstance(body, dict) else None
         key = self._cooldown_key(path, query_params, payload)
+        path_base = self._path_base(path)
+        
+        # Extract internal symbol for symbol format handling
+        internal_symbol = _original_internal_symbol
+        if internal_symbol is None:
+            # Extract from payload or query params
+            if payload:
+                for sym_key in ('symbol', 'productId'):
+                    if sym_key in payload:
+                        internal_symbol = self.clean_symbol(str(payload[sym_key]))
+                        break
+            if internal_symbol is None and query_params and 'symbol=' in query_params:
+                match = re.search(r'symbol=([^&]+)', query_params)
+                if match:
+                    internal_symbol = self.clean_symbol(match.group(1))
+        
+        # Determine symbol format to use
+        symbol_formats = ["contract", "cmt", "plain"]
+        
+        if internal_symbol:
+            # Check cache first
+            cached_fmt = self._get_cached_symbol_format(path_base, internal_symbol)
+            if cached_fmt:
+                current_format = cached_fmt
+            else:
+                current_format = symbol_formats[_symbol_fallback_attempt] if _symbol_fallback_attempt < len(symbol_formats) else "contract"
+        else:
+            current_format = None
         
         for attempt in range(max_retries):
             # Check per-route cooldown
@@ -506,27 +681,42 @@ class WEEXv2Client:
             
             timestamp = str(int(time.time() * 1000))
             
-            # Strip cmt_ prefix from symbols in payload
-            if body and isinstance(body, dict):
-                if 'symbol' in body:
-                    body['symbol'] = body['symbol'].replace('cmt_', '').upper()
-            
-            # Strip cmt_ prefix from symbols in query parameters
-            if query_params and 'symbol=' in query_params:
-                query_params = re.sub(r'symbol=cmt_([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params, flags=re.IGNORECASE)
-                query_params = re.sub(r'symbol=([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params)
-            
-            # Handle body stringification
+            # Make a copy of body for this request to avoid mutation issues
+            request_body = None
             if body:
                 if isinstance(body, dict):
-                    body_str = json.dumps(body, separators=(',', ':'))
+                    request_body = body.copy()
                 else:
-                    body_str = body
+                    request_body = body
+            
+            # Central symbol rewrite in payload
+            if request_body and isinstance(request_body, dict) and internal_symbol and current_format:
+                for sym_key in ('symbol', 'productId'):
+                    if sym_key in request_body:
+                        encoded_symbol = self._encode_symbol(internal_symbol, current_format)
+                        request_body[sym_key] = encoded_symbol
+                        if _symbol_fallback_attempt == 0 and attempt == 0:
+                            logger.info(f"Resolved symbol: {internal_symbol} → {encoded_symbol} (preflight)")
+            
+            # Central symbol rewrite in query parameters
+            request_query = query_params
+            if request_query and internal_symbol and current_format and 'symbol=' in request_query:
+                encoded_symbol = self._encode_symbol(internal_symbol, current_format)
+                request_query = re.sub(r'symbol=[^&]+', f'symbol={encoded_symbol}', request_query)
+                if _symbol_fallback_attempt == 0 and attempt == 0:
+                    logger.info(f"Resolved symbol in query: {internal_symbol} → {encoded_symbol} (preflight)")
+            
+            # Handle body stringification
+            if request_body:
+                if isinstance(request_body, dict):
+                    body_str = json.dumps(request_body, separators=(',', ':'))
+                else:
+                    body_str = request_body
             else:
                 body_str = ""
             
             # Generate signature
-            signature = self.generate_signature(timestamp, method, path, query_params, body_str)
+            signature = self.generate_signature(timestamp, method, path, request_query, body_str)
             
             headers = {
                 "ACCESS-KEY": self.api_key,
@@ -537,7 +727,7 @@ class WEEXv2Client:
                 "locale": "en-US"
             }
             
-            url = f"{self.BASE_URL}{path}{query_params}"
+            url = f"{self.BASE_URL}{path}{request_query}"
             
             try:
                 # Make the request using the session
@@ -551,6 +741,44 @@ class WEEXv2Client:
                     # Clear cooldown for this key on success
                     self._last_521_by_key.pop(key, None)
                     self._cooldown_by_key.pop(key, None)
+                    
+                    # Cache the successful symbol format
+                    if internal_symbol and current_format:
+                        self._set_cached_symbol_format(path_base, internal_symbol, current_format)
+                    
+                    return response
+                
+                # Handle 40020 "Parameter symbol is invalid" error with symbol format fallback
+                if response.status_code == 400 and internal_symbol:
+                    try:
+                        resp_data = response.json()
+                        error_code = str(resp_data.get('code', ''))
+                        error_msg = str(resp_data.get('msg', resp_data.get('message', '')))
+                        
+                        # Only trigger fallback on error code 40020
+                        if error_code == '40020' or 'symbol is invalid' in error_msg.lower():
+                            next_attempt = _symbol_fallback_attempt + 1
+                            if next_attempt < len(symbol_formats):
+                                next_format = symbol_formats[next_attempt]
+                                logger.warning(f"⚠️ 40020 error for {internal_symbol}, trying fallback format: {next_format}")
+                                return self.send_weex_request(
+                                    method=method,
+                                    path=path,
+                                    query_params=query_params,
+                                    body=body,
+                                    timeout=timeout,
+                                    max_retries=max_retries,
+                                    _symbol_fallback_attempt=next_attempt,
+                                    _original_internal_symbol=internal_symbol
+                                )
+                            else:
+                                # Exhausted all format attempts
+                                logger.error(f"❌ All symbol formats failed for {internal_symbol} on {path_base}")
+                                return response
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+                    
+                    # Non-40020 400 error - return immediately without retry
                     return response
                 
                 # Handle 521 errors with per-key cooldown
