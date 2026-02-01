@@ -388,6 +388,29 @@ MIN_SHARPE_RATIO = 1.2           # Minimum for deployment
 FLASH_CRASH_TEST = -0.20         # -20% stress test
 ```
 
+### Cloudflare 521 Hardening Configuration
+
+The bot includes advanced error handling for Cloudflare 521 errors with per-route cooldown tracking:
+
+```bash
+# API rate limiting and backoff configuration
+WEEX_API_DELAY=0.5                  # Delay between API calls (seconds)
+WEEX_521_BASE_BACKOFF=8             # Base backoff for 521 errors (seconds)
+WEEX_521_MAX_BACKOFF=45             # Maximum backoff cap (seconds)
+
+# Leverage initialization
+WEEX_DISABLE_LEVERAGE_INIT=true     # Skip leverage init to reduce 404 noise
+
+# Optional: TLS impersonation (requires curl_cffi package)
+USE_CURL_CFFI=false                 # Use curl_cffi for advanced TLS handling
+```
+
+**How it works:**
+- **Per-route cooldown**: A 521 error on BTCUSDT K-lines won't block ETHUSDT K-lines or balance checks
+- **Jittered exponential backoff**: Automatic retry with randomized delays (5-25s jitter) to avoid thundering herd
+- **Smart recovery**: Cooldown clears automatically on the first successful 200 response for each route
+- **Symbol isolation**: Each symbol+endpoint combination has independent cooldown tracking
+
 ---
 
 ## 📚 Documentation
