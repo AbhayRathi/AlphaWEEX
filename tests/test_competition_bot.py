@@ -171,6 +171,10 @@ class TestWEEXv2Client:
         """Test leverage endpoint uses correct path and body format"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
+        # Pre-populate contract map to avoid network calls
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = 999999999999
+        
         # Mock successful response
         mock_response = Mock()
         mock_response.status_code = 200
@@ -194,8 +198,8 @@ class TestWEEXv2Client:
             
             # Check body contains marginMode as string "isolated" and leverage as string
             body_data = json.loads(call_args[1]['data'])
-            # Symbol should be cleaned (cmt_ removed, uppercase)
-            assert body_data['symbol'] == "BTCUSDT"
+            # Symbol should be resolved to contract format (cmt_btcusdt -> BTCUSDT_UMCBL)
+            assert body_data['symbol'] == "BTCUSDT_UMCBL"
             assert body_data['marginMode'] == "isolated"  # String: "isolated" (required by V2 API)
             assert body_data['leverage'] == "10"  # String format required by V2 API
             assert isinstance(body_data['marginMode'], str)
@@ -258,11 +262,15 @@ class TestWEEXv2Client:
         """Test klines endpoint handles errors properly"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
-        # Mock call to fail with 400
+        # Pre-populate contract map to avoid network calls
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = 999999999999
+        
+        # Mock call to fail with 400 (non-40020 error to avoid symbol format fallback)
         mock_response_fail = Mock()
         mock_response_fail.status_code = 400
-        mock_response_fail.text = "Invalid symbol"
-        mock_response_fail.json.return_value = {'code': 40020, 'message': 'Invalid symbol'}
+        mock_response_fail.text = "Invalid request"
+        mock_response_fail.json.return_value = {'code': '40001', 'msg': 'Invalid request'}
         
         # Patch the session.get method to return error response
         with patch.object(client.session, 'get', return_value=mock_response_fail) as mock_get:
@@ -276,8 +284,12 @@ class TestWEEXv2Client:
             assert mock_get.call_count == 1
     
     def test_get_klines_success(self):
-        """Test klines endpoint succeeds with symbol converted to uppercase"""
+        """Test klines endpoint succeeds with symbol converted to contract format"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Pre-populate contract map to avoid network calls
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = 999999999999
         
         # Mock successful response on first try
         mock_response = Mock()
@@ -297,9 +309,9 @@ class TestWEEXv2Client:
             # Verify the endpoint was called only once
             assert mock_get.call_count == 1
             
-            # Should clean symbol (remove cmt_, uppercase)
+            # Should resolve symbol to contract format
             call_url = mock_get.call_args[0][0]
-            assert "BTCUSDT" in call_url
+            assert "BTCUSDT_UMCBL" in call_url
             assert "CMT_" not in call_url
     
     def test_get_order_book_symbol_format(self):
@@ -401,8 +413,12 @@ class TestWEEXv2Client:
             assert "CMT_" not in url
     
     def test_place_market_order_preserves_cmt_prefix(self):
-        """Test that place_market_order cleans symbol (removes cmt_, uppercase)"""
+        """Test that place_market_order resolves symbol to contract format"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Pre-populate contract map to avoid network calls
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = 999999999999
         
         # Clear any active symbols from previous tests to avoid AI Wars blocking
         client.active_symbols.clear()
@@ -432,9 +448,9 @@ class TestWEEXv2Client:
                 assert mock_post.called
                 call_args = mock_post.call_args
                 
-                # Check body contains cleaned symbol (cmt_ removed, uppercase)
+                # Check body contains resolved contract symbol (cmt_btcusdt -> BTCUSDT_UMCBL)
                 body_data = json.loads(call_args[1]['data'])
-                assert body_data['symbol'] == "BTCUSDT"
+                assert body_data['symbol'] == "BTCUSDT_UMCBL"
                 assert "CMT_" not in body_data['symbol']
                 assert body_data['side'] == "1"  # BUY is mapped to "1" in V2 API
                 assert body_data['type'] == "1"  # MARKET type is "1" in V2 API

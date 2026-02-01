@@ -410,6 +410,32 @@ WEEX_DISABLE_LEVERAGE_INIT=true     # Skip leverage init to reduce 404 noise
 - **Smart recovery**: Cooldown clears automatically on the first successful 200 response for each route
 - **Symbol isolation**: Each symbol+endpoint combination has independent cooldown tracking
 
+### WEEX V2 Symbol Format Auto-Fallback
+
+The bot automatically handles WEEX V2's varying symbol format requirements across endpoints:
+
+```bash
+# CI/Testing overrides (optional - leave empty for production)
+WEEX_CONTRACT_MAP_OVERRIDE=         # JSON to override contract discovery
+WEEX_SYMBOL_FORMAT_HINT=            # JSON to pre-seed symbol format cache
+```
+
+**How it works:**
+- **Central symbol rewrite**: All API requests normalize symbols before sending
+- **40020 auto-fallback**: On "Parameter symbol is invalid" (code 40020), the bot tries:
+  1. Contract format: `BTCUSDT_UMCBL` (resolved via contract discovery)
+  2. Legacy cmt format: `cmt_btcusdt`
+  3. Plain format: `BTCUSDT`
+- **Per-endpoint caching**: First successful format is cached for 60 minutes per path+symbol
+- **No retry for other 400 errors**: Only error code 40020 triggers the symbol fallback
+
+**Example log output:**
+```
+Resolved symbol: BTCUSDT → BTCUSDT_UMCBL (preflight)
+⚠️ 40020 error for BTCUSDT, trying fallback format: cmt
+Cached symbol format: /capi/v2/order/placeOrder + BTCUSDT → cmt
+```
+
 ---
 
 ## 📚 Documentation
