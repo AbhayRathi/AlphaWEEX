@@ -1228,29 +1228,33 @@ class TestVolatilityBypass:
         monkeypatch.setenv('WEEX_DISABLE_VOLATILITY_BYPASS', 'true')
         
         # Force reimport to pick up new env var
+        # Note: imports inside method are intentional due to module reload requirements
         import importlib
         import competition_bot
         importlib.reload(competition_bot)
         
         assert competition_bot.VOLATILITY_BYPASS_DISABLED is True
         
-        # Reset to default
+        # Reset to default and verify cleanup
         monkeypatch.delenv('WEEX_DISABLE_VOLATILITY_BYPASS', raising=False)
         importlib.reload(competition_bot)
+        assert competition_bot.VOLATILITY_BYPASS_DISABLED is False, "Should reset to default after env var removed"
     
     def test_volatility_bypass_threshold_from_env(self, mock_env, monkeypatch):
         """Test VOLATILITY_BYPASS_PCT sets threshold from environment"""
         monkeypatch.setenv('VOLATILITY_BYPASS_PCT', '1.5')
         
+        # Note: imports inside method are intentional due to module reload requirements
         import importlib
         import competition_bot
         importlib.reload(competition_bot)
         
         assert competition_bot.VOLATILITY_BYPASS_THRESHOLD == 1.5
         
-        # Reset to default
+        # Reset to default and verify cleanup
         monkeypatch.delenv('VOLATILITY_BYPASS_PCT', raising=False)
         importlib.reload(competition_bot)
+        assert competition_bot.VOLATILITY_BYPASS_THRESHOLD == 0.33, "Should reset to default after env var removed"
     
     def test_volatility_bypass_default_values(self, mock_env, monkeypatch):
         """Test default values when env vars are not set"""
@@ -1258,6 +1262,7 @@ class TestVolatilityBypass:
         monkeypatch.delenv('WEEX_DISABLE_VOLATILITY_BYPASS', raising=False)
         monkeypatch.delenv('VOLATILITY_BYPASS_PCT', raising=False)
         
+        # Note: imports inside method are intentional due to module reload requirements
         import importlib
         import competition_bot
         importlib.reload(competition_bot)
@@ -1273,7 +1278,17 @@ class TestOrderLogging:
         """Test that place_market_order logs attempt and result"""
         import logging
         
+        # Create client and clear any persisted state
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        client.active_symbols = set()  # Clear any persisted active symbols
+        
+        # Pre-populate contract map to avoid discovery calls
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = time.time()
+        
+        # Pre-populate symbol format cache
+        client._symbol_format_cache[("/capi/v2/order/placeOrder", "BTCUSDT")] = "contract"
+        client._symbol_format_cache_timestamp[("/capi/v2/order/placeOrder", "BTCUSDT")] = time.time()
         
         # Mock successful response
         mock_response = Mock()
