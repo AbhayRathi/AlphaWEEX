@@ -191,6 +191,51 @@ class WEEXv2Client:
         cleaned = symbol.lower().replace('cmt_', '').upper()
         return cleaned
     
+    def _extract_internal_key(self, contract: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract internal symbol key from contract data
+        
+        Args:
+            contract: Contract data dict from API response
+            
+        Returns:
+            Internal symbol key (e.g., BTCUSDT) or None if extraction fails
+            
+        Extraction strategy:
+        1. If baseCoin and quoteCoin exist, use them (e.g., BTC + USDT = BTCUSDT)
+        2. Otherwise, extract from exchange symbol by removing suffixes:
+           - BTCUSDT_UMCBL -> BTCUSDT
+           - BTCUSDT-PERP -> BTCUSDT
+        """
+        # Try to extract base and quote coins (most reliable)
+        base = contract.get('baseCoin', '')
+        quote = contract.get('quoteCoin', '')
+        
+        if base and quote:
+            # Normalize to uppercase and concatenate
+            return f"{base.upper()}{quote.upper()}"
+        
+        # Fallback: extract from exchange symbol
+        exchange_symbol = (contract.get('symbol') or 
+                          contract.get('contractSymbol') or 
+                          contract.get('productId', ''))
+        
+        if not exchange_symbol:
+            return None
+        
+        # Remove common suffixes to get internal key
+        # Order matters: try specific suffixes first
+        for suffix in ['_UMCBL', '-PERP', '_PERP']:
+            if suffix in exchange_symbol:
+                return exchange_symbol.replace(suffix, '').upper()
+        
+        # If no suffix found, check if it contains USDT (common base pattern)
+        # e.g., "BTCUSDT" -> "BTCUSDT"
+        if 'USDT' in exchange_symbol.upper():
+            return exchange_symbol.split('_')[0].split('-')[0].upper()
+        
+        return None
+    
     def load_contracts(self) -> Dict[str, str]:
         """
         Load contract discovery data from WEEX V2 API
@@ -239,37 +284,14 @@ class WEEXv2Client:
                     # Build mapping
                     contract_map = {}
                     for contract in contracts:
-                        # Extract symbol/contractSymbol/productId
-                        exchange_symbol = (contract.get('symbol') or 
-                                          contract.get('contractSymbol') or 
-                                          contract.get('productId'))
-                        
-                        if not exchange_symbol:
-                            continue
-                        
-                        # Try to extract base and quote coins
-                        base = contract.get('baseCoin', '')
-                        quote = contract.get('quoteCoin', '')
-                        
-                        if base and quote:
-                            # Normalize to uppercase and concatenate
-                            internal_key = f"{base.upper()}{quote.upper()}"
-                            contract_map[internal_key] = exchange_symbol
-                        else:
-                            # Fallback: extract from exchange_symbol (e.g., BTCUSDT_UMCBL -> BTCUSDT)
-                            # Remove common suffixes
-                            for suffix in ['_UMCBL', '-PERP', '_PERP', 'USDT']:
-                                if suffix in exchange_symbol:
-                                    if suffix == 'USDT':
-                                        # Keep USDT in the key
-                                        internal_key = exchange_symbol.split('_')[0].split('-')[0].upper()
-                                        if 'USDT' in internal_key:
-                                            contract_map[internal_key] = exchange_symbol
-                                        break
-                                    else:
-                                        internal_key = exchange_symbol.replace(suffix, '').upper()
-                                        contract_map[internal_key] = exchange_symbol
-                                        break
+                        internal_key = self._extract_internal_key(contract)
+                        if internal_key:
+                            # Extract symbol/contractSymbol/productId
+                            exchange_symbol = (contract.get('symbol') or 
+                                              contract.get('contractSymbol') or 
+                                              contract.get('productId'))
+                            if exchange_symbol:
+                                contract_map[internal_key] = exchange_symbol
                     
                     if contract_map:
                         self._contract_map = contract_map
@@ -308,16 +330,9 @@ class WEEXv2Client:
             logger.debug(f"Resolved symbol: {clean_sym} → {exchange_sym}")
             return exchange_sym
         
-        # Fallback: try common patterns
-        fallbacks = [
-            f"{clean_sym}_UMCBL",
-            clean_sym.replace("-", ""),
-            clean_sym.replace("_", ""),
-            f"{clean_sym}-PERP"
-        ]
-        
-        # Use the first fallback (most common for WEEX)
-        exchange_sym = fallbacks[0]
+        # Fallback: use _UMCBL suffix (most common for WEEX V2 perpetual contracts)
+        # Note: WEEX V2 uses BTCUSDT_UMCBL format for USDT-margined perpetual contracts
+        exchange_sym = f"{clean_sym}_UMCBL"
         logger.info(f"Resolved symbol (fallback): {clean_sym} → {exchange_sym}")
         return exchange_sym
     

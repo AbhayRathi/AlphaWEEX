@@ -14,7 +14,15 @@ from core.weex_v2_client import WEEXv2Client
 load_dotenv()
 
 def main():
-    """Main verification function"""
+    """
+    Main verification function
+    
+    Tests contract discovery and symbol resolution for WEEX V2 API.
+    Verifies that internal symbols (BTCUSDT) resolve to exchange symbols (BTCUSDT_UMCBL).
+    
+    Raises:
+        SystemExit: If API credentials are missing
+    """
     print("=" * 60)
     print("WEEX V2 Symbol Resolution Verification")
     print("=" * 60)

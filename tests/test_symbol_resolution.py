@@ -206,3 +206,8 @@ class TestSymbolResolutionInMethods:
         
         # Verify resolve was called
         mock_resolve.assert_called_once_with("ETHUSDT")
+        
+        # Verify the resolved symbol was used in the request body
+        call_args = mock_send_request.call_args
+        body = call_args[1]['body']
+        assert body['symbol'] == "ETHUSDT_UMCBL", "Resolved symbol should be used in API request"
