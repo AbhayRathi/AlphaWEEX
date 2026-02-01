@@ -16,6 +16,7 @@ import time
 import logging
 import json
 import threading
+import random
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
@@ -1665,21 +1666,18 @@ class CompetitionTradingBot:
             # 4. Generate signal (LLM or RSI/SMA)
             signal = self.generate_signal(klines, symbol)
             
-            # Alpha-Apex: Volatility bypass check
-            # If 5-minute price change > threshold%, allow trade at confidence > 0.65
-            # Env-driven: WEEX_DISABLE_VOLATILITY_BYPASS=true disables volatility filter entirely
-            #             VOLATILITY_BYPASS_PCT=1.0 (or any high value) effectively bypasses
-            volatility_bypass = False
-            if VOLATILITY_BYPASS_DISABLED:
-                # Volatility filter completely disabled via env
-                volatility_bypass = True
-                logger.info(f"⚡ Volatility filter disabled for {symbol} (WEEX_DISABLE_VOLATILITY_BYPASS=true)")
-            elif len(klines) >= 5:
+            # Alpha-Apex: Volatility guard check
+            # If 5-minute price change > threshold%, skip trade (high volatility = dangerous)
+            # Env-driven: WEEX_DISABLE_VOLATILITY_BYPASS=true disables volatility filter entirely (allows trading at any volatility)
+            #             VOLATILITY_BYPASS_PCT=1.0 (or any high value) effectively never triggers the guard
+            if not VOLATILITY_BYPASS_DISABLED and len(klines) >= 5:
                 price_5min_ago = float(klines[-5][4])
                 price_change_5min_pct = abs((current_price - price_5min_ago) / price_5min_ago) * 100
                 if price_change_5min_pct > VOLATILITY_BYPASS_THRESHOLD:
-                    volatility_bypass = True
-                    logger.info(f"⚡ Volatility bypass active for {symbol}: 5-min change {price_change_5min_pct:.2f}% > {VOLATILITY_BYPASS_THRESHOLD}%")
+                    logger.info(f"⛔ Skipping trade due to volatility guard: {symbol} 5m change {price_change_5min_pct:.2f}% > threshold {VOLATILITY_BYPASS_THRESHOLD:.2f}%")
+                    return
+            elif VOLATILITY_BYPASS_DISABLED:
+                logger.info(f"🛡️ Volatility guard disabled for {symbol} (WEEX_DISABLE_VOLATILITY_BYPASS=true)")
             
             # 5. Log decision with AI reasoning (for every scan, including HOLD)
             # a) First, log with the new log_decision method for easy console scannability (📝 emoji)
@@ -1701,7 +1699,8 @@ class CompetitionTradingBot:
             )
             
             # Alpha-Apex: Determine effective confidence threshold
-            confidence_threshold = VOLATILITY_BYPASS_CONFIDENCE if volatility_bypass else MIN_CONFIDENCE
+            # Note: With volatility guard in place, we always use MIN_CONFIDENCE
+            confidence_threshold = MIN_CONFIDENCE
             
             # Aggressive: DEBUG logging for transparency
             if signal["action"] in ["BUY", "SELL"]:
@@ -1761,6 +1760,9 @@ class CompetitionTradingBot:
                 # Place BUY order with TP/SL
                 logger.info(f"🟢 BUY signal for {symbol}: {signal['reason'][:80]}... (Confidence: {signal['confidence']:.2%})")
                 logger.info(f"🎯 AI Wars TP/SL: Entry=${current_price:.2f}, SL=${stop_loss_price:.2f}, TP=${take_profit_price:.2f}")
+                
+                # All guards passed
+                logger.info(f"✅ Passed all guards; placing order: {symbol} BUY size={position_size:.6f}")
                 
                 # AI Wars: Place order with exchange-side TP/SL parameters
                 order = self.client.place_market_order(symbol, "BUY", position_size, check_spread=True,
@@ -1872,6 +1874,9 @@ class CompetitionTradingBot:
                         price=current_price,
                         order_id=order_id
                     )
+                else:
+                    # Order failed - log for traceability
+                    logger.error(f"🟥 Order failed: {symbol} BUY size={position_size:.6f} - order returned None")
             
             elif signal["action"] == "SELL" and signal["confidence"] >= confidence_threshold:
                 # Alpha-Apex: Enable SHORTING (bi-directional trading)
@@ -1919,6 +1924,10 @@ class CompetitionTradingBot:
                     
                     # Place SELL order to open SHORT with TP/SL
                     logger.info(f"🎯 AI Wars TP/SL: Entry=${current_price:.2f}, SL=${stop_loss_price:.2f}, TP=${take_profit_price:.2f}")
+                    
+                    # All guards passed
+                    logger.info(f"✅ Passed all guards; placing order: {symbol} SELL size={position_size:.6f}")
+                    
                     order = self.client.place_market_order(symbol, "SELL", position_size, check_spread=True,
                                                            stop_loss_price=stop_loss_price, 
                                                            take_profit_price=take_profit_price)
@@ -2038,6 +2047,9 @@ class CompetitionTradingBot:
                             price=current_price,
                             order_id=order_id
                         )
+                    else:
+                        # Order failed - log for traceability
+                        logger.error(f"🟥 Order failed: {symbol} SELL size={position_size:.6f} - order returned None")
                 else:
                     # Close existing LONG position
                     logger.info(f"🔴 SELL signal for {symbol}: Closing LONG position")
@@ -2258,11 +2270,14 @@ class CompetitionTradingBot:
                     self.save_position_state()
                     self.last_state_save_time = current_time
                 
-                # Process each symbol
-                for symbol in SYMBOL_LIST:
+                # Process each symbol (shuffled to reduce request bursts)
+                symbols = SYMBOL_LIST.copy()
+                random.shuffle(symbols)
+                for symbol in symbols:
                     logger.info(f"\n🔍 Processing {symbol}...")
                     self.process_symbol(symbol)
-                    time.sleep(2)  # Small delay between symbols
+                    # Small delay between symbols with jitter to reduce burst patterns
+                    time.sleep(2 + random.uniform(0.1, 0.25))
                 
                 # Aggressive: 20-second cooldown to catch micro-moves
                 logger.info(f"\n⏸️ Cycle complete. Waiting 20s before next cycle to catch micro-moves...")

@@ -410,6 +410,11 @@ WEEX_DISABLE_LIQUID_CAPITAL=false   # Emergency kill-switch to bypass liquid cap
 # Available balance fallback
 WEEX_AVAILABLE_FALLBACK_HAIRCUT=1.0 # Multiply fallback "available" by this factor (e.g., 0.98 for extra caution)
 
+# Volatility guard configuration (competition window toggles)
+VOLATILITY_BYPASS_PCT=0.33          # Threshold in % for 5-min price change to trigger guard (default: 0.33)
+                                     # Set to 1.0 (or higher) to effectively never trigger the guard
+WEEX_DISABLE_VOLATILITY_BYPASS=false # Set to true to completely disable volatility filter (allows trading at any volatility)
+
 # Note: USE_CURL_CFFI is reserved for future TLS impersonation feature (not yet implemented)
 ```
 

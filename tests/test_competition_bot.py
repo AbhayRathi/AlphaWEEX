@@ -1314,5 +1314,318 @@ class TestOrderLogging:
                 assert len(placed_calls) >= 1, "Should log order placed result"
 
 
+class TestVolatilityGuardBehavior:
+    """Test volatility guard behavior (veto vs allow)"""
+    
+    @pytest.fixture
+    def mock_env(self, monkeypatch):
+        """Set up environment variables for testing"""
+        monkeypatch.setenv('API_KEY', 'test_key')
+        monkeypatch.setenv('API_SECRET', 'test_secret')
+        monkeypatch.setenv('API_PASSWORD', 'test_pass')
+    
+    def test_volatility_guard_vetoes_high_volatility(self, mock_env, monkeypatch, caplog):
+        """Test that volatility guard vetoes trade when 5m change > threshold"""
+        import importlib
+        import logging
+        
+        # Set threshold to 0.33 and ensure bypass is NOT disabled
+        monkeypatch.setenv('VOLATILITY_BYPASS_PCT', '0.33')
+        monkeypatch.delenv('WEEX_DISABLE_VOLATILITY_BYPASS', raising=False)
+        
+        import competition_bot
+        importlib.reload(competition_bot)
+        
+        # Verify settings
+        assert competition_bot.VOLATILITY_BYPASS_THRESHOLD == 0.33
+        assert competition_bot.VOLATILITY_BYPASS_DISABLED is False
+        
+        # Create mock bot with test mode
+        with patch.object(competition_bot, 'WEEXv2Client'):
+            with patch.object(competition_bot, 'AITradingLogger'):
+                with patch.object(competition_bot, 'AILogEngine'):
+                    with patch.object(competition_bot, 'DatabaseManager'):
+                        with patch.object(competition_bot, 'FundingRateAnalyzer'):
+                            with patch.object(competition_bot, 'TradeJournal'):
+                                with patch.object(competition_bot, 'PositionStatePersistence'):
+                                    bot = competition_bot.CompetitionTradingBot(use_llm=False, test_mode=True)
+                                    
+                                    # Mock client methods
+                                    bot.client.get_market_klines = Mock(return_value=[
+                                        # Simulating 5 klines where price change is 0.50% (> 0.33% threshold)
+                                        ['', '', '', '', '100.00'],  # oldest
+                                        ['', '', '', '', '100.10'],
+                                        ['', '', '', '', '100.20'],
+                                        ['', '', '', '', '100.30'],
+                                        ['', '', '', '', '100.50'],  # newest (0.50% change)
+                                    ])
+                                    bot.client.has_open_position = Mock(return_value=False)
+                                    
+                                    # Mock signal to be BUY with high confidence
+                                    bot.generate_signal = Mock(return_value={
+                                        "action": "BUY",
+                                        "confidence": 0.80,
+                                        "reason": "Test signal"
+                                    })
+                                    
+                                    bot.get_behavioral_tag = Mock(return_value="NORMAL")
+                                    
+                                    # Enable logging capture
+                                    with caplog.at_level(logging.INFO):
+                                        bot.process_symbol("BTCUSDT")
+                                    
+                                    # Check that the volatility guard log appears
+                                    assert any("Skipping trade due to volatility guard" in record.message for record in caplog.records), \
+                                        f"Should log volatility skip reason. Captured logs: {[r.message for r in caplog.records]}"
+    
+    def test_volatility_guard_allows_when_disabled(self, mock_env, monkeypatch, caplog):
+        """Test that volatility filter is disabled when WEEX_DISABLE_VOLATILITY_BYPASS=true"""
+        import importlib
+        import logging
+        
+        # Disable volatility filter
+        monkeypatch.setenv('WEEX_DISABLE_VOLATILITY_BYPASS', 'true')
+        
+        import competition_bot
+        importlib.reload(competition_bot)
+        
+        assert competition_bot.VOLATILITY_BYPASS_DISABLED is True
+        
+        # Create mock bot with test mode
+        with patch.object(competition_bot, 'WEEXv2Client'):
+            with patch.object(competition_bot, 'AITradingLogger'):
+                with patch.object(competition_bot, 'AILogEngine'):
+                    with patch.object(competition_bot, 'DatabaseManager'):
+                        with patch.object(competition_bot, 'FundingRateAnalyzer'):
+                            with patch.object(competition_bot, 'TradeJournal'):
+                                with patch.object(competition_bot, 'PositionStatePersistence'):
+                                    bot = competition_bot.CompetitionTradingBot(use_llm=False, test_mode=True)
+                                    
+                                    # Mock client methods with HIGH volatility (would normally be vetoed)
+                                    bot.client.get_market_klines = Mock(return_value=[
+                                        ['', '', '', '', '100.00'],  # oldest
+                                        ['', '', '', '', '100.10'],
+                                        ['', '', '', '', '100.20'],
+                                        ['', '', '', '', '100.30'],
+                                        ['', '', '', '', '100.50'],  # newest (0.50% change > 0.33% threshold)
+                                    ])
+                                    bot.client.has_open_position = Mock(return_value=False)
+                                    
+                                    bot.generate_signal = Mock(return_value={
+                                        "action": "HOLD",
+                                        "confidence": 0.50,
+                                        "reason": "Test hold signal"
+                                    })
+                                    
+                                    bot.get_behavioral_tag = Mock(return_value="NORMAL")
+                                    
+                                    with caplog.at_level(logging.INFO):
+                                        bot.process_symbol("BTCUSDT")
+                                    
+                                    # Should log that filter is disabled
+                                    assert any("Volatility guard disabled" in record.message for record in caplog.records), \
+                                        f"Should log that volatility guard is disabled. Captured logs: {[r.message for r in caplog.records]}"
+                                    
+                                    # Should NOT log volatility skip reason
+                                    assert not any("Skipping trade due to volatility guard" in record.message for record in caplog.records), \
+                                        "Should NOT log volatility skip when guard is disabled"
+        
+        # Cleanup
+        monkeypatch.delenv('WEEX_DISABLE_VOLATILITY_BYPASS', raising=False)
+        importlib.reload(competition_bot)
+
+
+class TestSkipReasonLogs:
+    """Test that skip-reason logs are present and explicit"""
+    
+    @pytest.fixture
+    def mock_env(self, monkeypatch):
+        """Set up environment variables for testing"""
+        monkeypatch.setenv('API_KEY', 'test_key')
+        monkeypatch.setenv('API_SECRET', 'test_secret')
+        monkeypatch.setenv('API_PASSWORD', 'test_pass')
+        # Disable volatility filter for these tests
+        monkeypatch.setenv('WEEX_DISABLE_VOLATILITY_BYPASS', 'true')
+    
+    def test_effective_available_zero_skip_log(self, mock_env, monkeypatch, caplog):
+        """Test skip-reason log when effective_available <= 0"""
+        import importlib
+        import logging
+        
+        import competition_bot
+        importlib.reload(competition_bot)
+        
+        with patch.object(competition_bot, 'WEEXv2Client'):
+            with patch.object(competition_bot, 'AITradingLogger'):
+                with patch.object(competition_bot, 'AILogEngine'):
+                    with patch.object(competition_bot, 'DatabaseManager'):
+                        with patch.object(competition_bot, 'FundingRateAnalyzer'):
+                            with patch.object(competition_bot, 'TradeJournal'):
+                                with patch.object(competition_bot, 'PositionStatePersistence'):
+                                    bot = competition_bot.CompetitionTradingBot(use_llm=False, test_mode=True)
+                                    
+                                    # Mock to trigger funds check failure
+                                    bot.client.get_market_klines = Mock(return_value=[
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                    ])
+                                    bot.client.has_open_position = Mock(return_value=False)
+                                    bot.generate_signal = Mock(return_value={
+                                        "action": "BUY",
+                                        "confidence": 0.80,
+                                        "reason": "Test buy"
+                                    })
+                                    bot.get_behavioral_tag = Mock(return_value="NORMAL")
+                                    bot.calculate_total_exposure = Mock(return_value=0.0)
+                                    # Return 0 available funds
+                                    bot.get_effective_available = Mock(return_value=0.0)
+                                    
+                                    with caplog.at_level(logging.INFO):
+                                        bot.process_symbol("BTCUSDT")
+                                    
+                                    # Check for effective_available skip log
+                                    assert any("Skipped by available funds" in record.message or 
+                                              "effective_available" in record.message.lower() or
+                                              "available funds" in record.message for record in caplog.records), \
+                                        f"Should log skip when effective_available=0. Logs: {[r.message for r in caplog.records]}"
+
+
+class TestPassedAllGuardsLog:
+    """Test that 'Passed all guards' log appears before order placement"""
+    
+    @pytest.fixture
+    def mock_env(self, monkeypatch):
+        """Set up environment variables for testing"""
+        monkeypatch.setenv('API_KEY', 'test_key')
+        monkeypatch.setenv('API_SECRET', 'test_secret')
+        monkeypatch.setenv('API_PASSWORD', 'test_pass')
+        monkeypatch.setenv('WEEX_DISABLE_VOLATILITY_BYPASS', 'true')
+    
+    def test_passed_all_guards_log_before_buy(self, mock_env, monkeypatch, caplog):
+        """Test that 'Passed all guards' is logged before placing BUY order"""
+        import importlib
+        import logging
+        
+        import competition_bot
+        importlib.reload(competition_bot)
+        
+        with patch.object(competition_bot, 'WEEXv2Client'):
+            with patch.object(competition_bot, 'AITradingLogger'):
+                with patch.object(competition_bot, 'AILogEngine'):
+                    with patch.object(competition_bot, 'DatabaseManager'):
+                        with patch.object(competition_bot, 'FundingRateAnalyzer'):
+                            with patch.object(competition_bot, 'TradeJournal'):
+                                with patch.object(competition_bot, 'PositionStatePersistence'):
+                                    bot = competition_bot.CompetitionTradingBot(use_llm=False, test_mode=True)
+                                    
+                                    # Mock successful order flow
+                                    bot.client.get_market_klines = Mock(return_value=[
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                        ['', '', '', '', '100.00'],
+                                    ])
+                                    bot.client.has_open_position = Mock(return_value=False)
+                                    bot.client.set_leverage = Mock(return_value=True)
+                                    bot.client.place_market_order = Mock(return_value={
+                                        'orderId': 'test_order_123',
+                                        'code': '00000'
+                                    })
+                                    bot.generate_signal = Mock(return_value={
+                                        "action": "BUY",
+                                        "confidence": 0.80,
+                                        "reason": "Test buy"
+                                    })
+                                    bot.get_behavioral_tag = Mock(return_value="NORMAL")
+                                    bot.calculate_total_exposure = Mock(return_value=0.0)
+                                    bot.get_effective_available = Mock(return_value=1000.0)
+                                    bot.is_volume_spike = Mock(return_value=True)
+                                    bot.analyze_market = Mock(return_value={'atr_pct': 1.5, 'rsi': 50})
+                                    bot.calculate_position_size = Mock(return_value=0.001)
+                                    
+                                    with caplog.at_level(logging.INFO):
+                                        bot.process_symbol("BTCUSDT")
+                                    
+                                    # Check for "Passed all guards" log
+                                    assert any("Passed all guards" in record.message for record in caplog.records), \
+                                        f"Should log 'Passed all guards' before placing order. Logs: {[r.message for r in caplog.records]}"
+
+
+class TestOrderFailureLogging:
+    """Test that order failures are logged properly"""
+    
+    def test_order_failure_logged_when_order_returns_none(self):
+        """Test that order failure is logged when place_market_order returns None"""
+        import logging
+        
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        client.active_symbols = set()
+        
+        # Pre-populate contract map
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = time.time()
+        
+        # Pre-populate symbol format cache
+        client._symbol_format_cache[("/capi/v2/order/placeOrder", "BTCUSDT")] = "contract"
+        client._symbol_format_cache_timestamp[("/capi/v2/order/placeOrder", "BTCUSDT")] = time.time()
+        
+        # Mock failed response (non-200)
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.text = "Bad Request"
+        mock_response.json.return_value = {'code': '40001', 'msg': 'Bad request'}
+        
+        with patch.object(client.session, 'post', return_value=mock_response):
+            with patch('core.weex_v2_client.logger') as mock_logger:
+                result = client.place_market_order("BTCUSDT", "BUY", 0.001)
+                
+                # Order should return None
+                assert result is None
+                
+                # Verify attempt log was called
+                placing_calls = [call for call in mock_logger.info.call_args_list 
+                               if '📤 Placing order' in str(call)]
+                assert len(placing_calls) >= 1, "Should log placing order attempt"
+    
+    def test_order_failure_logged_when_response_has_error(self):
+        """Test that order failure is logged when API returns error code"""
+        import logging
+        
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        client.active_symbols = set()
+        
+        # Pre-populate contract map
+        client._contract_map = {"BTCUSDT": "BTCUSDT_UMCBL"}
+        client._contract_map_timestamp = time.time()
+        
+        # Pre-populate symbol format cache
+        client._symbol_format_cache[("/capi/v2/order/placeOrder", "BTCUSDT")] = "contract"
+        client._symbol_format_cache_timestamp[("/capi/v2/order/placeOrder", "BTCUSDT")] = time.time()
+        
+        # Mock response with error code (200 but code != 00000)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'code': '40001',
+            'msg': 'Insufficient balance'
+        }
+        
+        with patch.object(client.session, 'post', return_value=mock_response):
+            with patch('core.weex_v2_client.logger') as mock_logger:
+                result = client.place_market_order("BTCUSDT", "BUY", 0.001)
+                
+                # Order should return None
+                assert result is None
+                
+                # Verify failure log was called
+                fail_calls = [call for call in mock_logger.warning.call_args_list 
+                             if 'Order failed' in str(call)]
+                assert len(fail_calls) >= 1, f"Should log order failure. Warning calls: {mock_logger.warning.call_args_list}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
