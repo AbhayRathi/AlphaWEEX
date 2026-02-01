@@ -280,9 +280,13 @@ class CompetitionTradingBot:
         self.auto_initialize()
         time.sleep(3)  # Space out requests
         
-        # Set leverage with spacing
-        self.initialize_leverage()
-        time.sleep(3)  # Space out requests
+        # Cloudflare 521 Hardening: Make leverage initialization skippable
+        if os.getenv("WEEX_DISABLE_LEVERAGE_INIT", "false").lower() in ("1", "true", "yes"):
+            logger.info("⚙️ Skipping leverage initialization (WEEX_DISABLE_LEVERAGE_INIT=true).")
+        else:
+            # Set leverage with spacing
+            self.initialize_leverage()
+            time.sleep(3)  # Space out requests
         
         # Sync balance
         try:

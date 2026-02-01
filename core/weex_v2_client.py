@@ -14,8 +14,11 @@ import logging
 import urllib.parse
 import uuid
 import re
+import random
 from typing import Union, Dict, Any, Optional, List
 from datetime import datetime
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,12 @@ class WEEXv2Client:
     INITIAL_SL_SHORT_PCT = 0.40  # Initial stop loss for shorts (0.40% - tighter)
     BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
     
+    # Cloudflare 521 Hardening: Jitter bounds for backoff calculations
+    JITTER_521_MIN = 5.0    # Minimum jitter for 521 errors (seconds)
+    JITTER_521_MAX = 25.0   # Maximum jitter for 521 errors (seconds)
+    JITTER_TIMEOUT_MIN = 0.5  # Minimum jitter for timeout errors (seconds)
+    JITTER_TIMEOUT_MAX = 2.5  # Maximum jitter for timeout errors (seconds)
+    
     def __init__(self, api_key: str, api_secret: str, api_password: str):
         """
         Initialize WEEX v2 Client
@@ -57,9 +66,25 @@ class WEEXv2Client:
         self.api_secret = api_secret
         self.api_password = api_password
         
-        # Track last 521 error for cooldown
-        self.last_521_error_time = 0
-        self.cooldown_seconds = 60
+        # Cloudflare 521 Hardening: Persistent Session with browser-like defaults
+        self.session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=Retry(total=0))
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Connection": "keep-alive",
+        })
+        
+        # Cloudflare 521 Hardening: Environment tunables
+        self.api_delay = float(os.getenv("WEEX_API_DELAY", "0"))
+        self._cooldown_base = int(os.getenv("WEEX_521_BASE_BACKOFF", "10"))
+        self._cooldown_cap = int(os.getenv("WEEX_521_MAX_BACKOFF", "60"))
+        
+        # Cloudflare 521 Hardening: Per-route(+symbol) cooldown tracking
+        self._cooldown_by_key: Dict[str, float] = {}
+        self._last_521_by_key: Dict[str, float] = {}
         
         # Track open positions for TP/SL management
         self.open_positions: Dict[str, Dict[str, Any]] = {}
@@ -72,9 +97,6 @@ class WEEXv2Client:
         # Alpha-Apex: Track position scaling state
         # {symbol: {"partial_taken": bool, "breakeven_set": bool, "reinvested": bool, "original_size": float}}
         self.position_scaling_state: Dict[str, Dict[str, Any]] = {}
-        
-        # Alpha-Apex: Persistent HTTP session for better performance and rate limiting
-        self.session = requests.Session()
         
         # Balance safety tracking: prevent ghost negative values
         self.last_known_positive_balance = 1000.0  # Default starting balance
@@ -196,6 +218,56 @@ class WEEXv2Client:
         precision = self.precision_map.get(symbol.lower(), 2)
         return round(rounded, precision)
     
+    def _cooldown_key(self, path: str, payload: Optional[dict]) -> str:
+        """
+        Cloudflare 521 Hardening: Generate cooldown key from path and symbol.
+        
+        Args:
+            path: API endpoint path
+            payload: Request payload (dict or None)
+            
+        Returns:
+            str: Cooldown key in format "path" or "path:SYMBOL"
+        """
+        key = path
+        try:
+            if isinstance(payload, dict) and payload.get("symbol"):
+                key = f"{path}:{str(payload['symbol']).upper()}"
+        except (KeyError, AttributeError, TypeError) as e:
+            # Log but don't fail - just use path without symbol
+            logger.debug(f"Could not extract symbol from payload for cooldown key: {e}")
+        return key
+    
+    def _cooldown_remaining(self, key: str) -> float:
+        """
+        Cloudflare 521 Hardening: Calculate remaining cooldown time for a key.
+        
+        Args:
+            key: Cooldown key (from _cooldown_key)
+            
+        Returns:
+            float: Remaining cooldown time in seconds (0.0 if no cooldown active)
+        """
+        last = self._last_521_by_key.get(key, 0.0)
+        dur = self._cooldown_by_key.get(key, 0.0)
+        return max(0.0, (last + dur) - time.time())
+    
+    def _calculate_backoff(self, attempt: int, jitter_min: float, jitter_max: float) -> float:
+        """
+        Cloudflare 521 Hardening: Calculate backoff time with jittered exponential backoff.
+        
+        Args:
+            attempt: Current retry attempt number (0-indexed)
+            jitter_min: Minimum jitter to add (seconds)
+            jitter_max: Maximum jitter to add (seconds)
+            
+        Returns:
+            float: Backoff time in seconds
+        """
+        base_backoff = min(self._cooldown_base * (2 ** attempt), self._cooldown_cap)
+        jitter = random.uniform(jitter_min, jitter_max)
+        return base_backoff + jitter
+    
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                            query_string: str, body_str: str) -> str:
         # Ensure method is UPPERCASE
@@ -211,53 +283,67 @@ class WEEXv2Client:
         return base64.b64encode(signature).decode()
         
     def send_weex_request(self, method: str, path: str, query_params: str = "", 
-                            body: Union[Dict, str, None] = None) -> requests.Response:
+                            body: Union[Dict, str, None] = None, 
+                            timeout: tuple = (5, 15), max_retries: int = 3) -> requests.Response:
         """
-        Send authenticated request to WEEX API using compact JSON for signatures.
+        Send authenticated request to WEEX API with per-route(+symbol) cooldown.
         
-        Alpha-Evo V3: Implements Exponential Backoff for 521 errors
-        AI Wars: Adds 1.5s delay between all API calls to avoid firewall
-        Alpha-Evo Final: Adds 405 error handling with 60s retry backoff
+        Cloudflare 521 Hardening:
+        - Per-route(+symbol) cooldown tracking
+        - Jittered exponential backoff for 521 errors
+        - Different handling for timeout errors (408, 522, 524)
+        - Clears cooldown on successful 200 response
+        
+        Args:
+            method: HTTP method (GET, POST)
+            path: API endpoint path
+            query_params: Query parameters string
+            body: Request body (dict or string)
+            timeout: Request timeout tuple (connect, read)
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            requests.Response: Successful response
+            
+        Raises:
+            Exception: If cooldown is active or max retries exceeded
         """
-        # AI Wars: Add delay to avoid triggering firewall
-        time.sleep(1.5)
+        # Prepare payload for cooldown key generation
+        payload = body if isinstance(body, dict) else None
+        key = self._cooldown_key(path, payload)
         
-        # Alpha-Evo V3: Exponential Backoff for 521 errors
-        max_retries = 3
-        base_backoff = 60  # Start at 60 seconds
-        
-        for retry in range(max_retries):
-            # 1. Cooldown check
-            if time.time() - self.last_521_error_time < self.cooldown_seconds:
-                remaining = self.cooldown_seconds - (time.time() - self.last_521_error_time)
-                logger.warning(f"🛑 521 Error cooldown active: {remaining:.1f}s remaining")
-                raise Exception(f"Cooldown active: {remaining:.1f}s remaining")
-        
+        for attempt in range(max_retries):
+            # Check per-route cooldown
+            rem = self._cooldown_remaining(key)
+            if rem > 0:
+                raise Exception(f"Cooldown active for {key}: {rem:.1f}s remaining")
+            
+            # Apply API delay if configured
+            if self.api_delay > 0:
+                time.sleep(self.api_delay)
+            
             timestamp = str(int(time.time() * 1000))
-        
-            # 2. Strip cmt_ prefix from symbols in payload
+            
+            # Strip cmt_ prefix from symbols in payload
             if body and isinstance(body, dict):
                 if 'symbol' in body:
                     body['symbol'] = body['symbol'].replace('cmt_', '').upper()
             
-            # 3. Strip cmt_ prefix from symbols in query parameters
+            # Strip cmt_ prefix from symbols in query parameters
             if query_params and 'symbol=' in query_params:
-                # Use regex to sanitize symbol parameter: remove cmt_ and uppercase
                 query_params = re.sub(r'symbol=cmt_([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params, flags=re.IGNORECASE)
-                # Handle case where symbol doesn't have cmt_ prefix but needs uppercasing
                 query_params = re.sub(r'symbol=([^&]+)', lambda m: f'symbol={m.group(1).upper()}', query_params)
-        
-            # 4. CRITICAL: Handle body stringification once and keep it compact
+            
+            # Handle body stringification
             if body:
                 if isinstance(body, dict):
-                    # Use separators to ensure NO whitespace (e.g., {"a":"b"} not {"a": "b"})
                     body_str = json.dumps(body, separators=(',', ':'))
                 else:
                     body_str = body
             else:
                 body_str = ""
-        
-            # 5. Generate signature using the same body_str that will be sent
+            
+            # Generate signature
             signature = self.generate_signature(timestamp, method, path, query_params, body_str)
             
             headers = {
@@ -266,53 +352,69 @@ class WEEXv2Client:
                 "ACCESS-PASSPHRASE": self.api_password,
                 "ACCESS-TIMESTAMP": timestamp,
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "locale": "en-US"
             }
             
             url = f"{self.BASE_URL}{path}{query_params}"
             
             try:
+                # Make the request using the session
                 if method.upper() == "GET":
-                    response = self.session.get(url, headers=headers, timeout=30)
+                    response = self.session.get(url, headers=headers, timeout=timeout)
                 else:
-                    # Send the EXACT body_str used for the signature
-                    response = self.session.post(url, headers=headers, data=body_str, timeout=30)
+                    response = self.session.post(url, headers=headers, data=body_str, timeout=timeout)
                 
-                # Alpha-Evo Final: Handle 405, 521, and 403 errors with backoff
-                # 405 = Method Not Allowed (API error), 521/403 = Cloudflare/firewall blocks
-                if response.status_code in [405, 521, 403]:
-                    # Alpha-Evo V3: Exponential Backoff with 60s minimum
-                    backoff_time = base_backoff * (2 ** retry)  # 60s, 120s, 240s
-                    if response.status_code == 521:
-                        error_type = "Cloudflare/Origin Connection Error"
-                    elif response.status_code == 403:
-                        error_type = "Firewall/Rate Limit"
+                # Handle successful response
+                if response.status_code == 200:
+                    # Clear cooldown for this key on success
+                    self._last_521_by_key.pop(key, None)
+                    self._cooldown_by_key.pop(key, None)
+                    return response
+                
+                # Handle 521 errors with per-key cooldown
+                if response.status_code == 521:
+                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
+                    self._last_521_by_key[key] = time.time()
+                    self._cooldown_by_key[key] = backoff
+                    logger.warning(f"🔥 521 Error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")
+                    if attempt < max_retries - 1:
+                        continue
                     else:
-                        error_type = "Method Not Allowed"
-                    logger.error(f"🔥 {response.status_code} Error ({error_type})! Retry {retry + 1}/{max_retries}, backing off {backoff_time}s...")
-                    self.last_521_error_time = time.time()
-                    self.cooldown_seconds = backoff_time
-                    
-                    if retry < max_retries - 1:
-                        time.sleep(backoff_time)
-                        continue  # Retry
+                        raise Exception(f"Request to {key} exhausted retries after 521 errors")
+                
+                # Handle timeout errors (408, 522, 524) with immediate backoff
+                if response.status_code in (408, 522, 524):
+                    backoff = self._calculate_backoff(attempt, self.JITTER_TIMEOUT_MIN, self.JITTER_TIMEOUT_MAX)
+                    logger.warning(f"⏱️ Timeout {response.status_code} for {key}! Attempt {attempt + 1}/{max_retries}, backoff: {backoff:.1f}s")
+                    time.sleep(backoff)
+                    if attempt < max_retries - 1:
+                        continue
                     else:
-                        raise ConnectionError(f"{response.status_code} {error_type} - Max retries ({max_retries}) exceeded. Please check your IP whitelist and network connectivity.")
-                    
-                # Success - reset cooldown to base
-                self.cooldown_seconds = 60
+                        raise Exception(f"Request to {key} exhausted retries after timeout errors")
+                
+                # For other status codes, return the response (let caller handle)
                 return response
                 
-            except Exception as e:
-                if ("405" not in str(e) and "521" not in str(e) and "403" not in str(e)) or retry >= max_retries - 1:
-                    logger.error(f"❌ Request failed: {str(e)}")
+            except (requests.exceptions.ConnectionError, ConnectionResetError) as e:
+                # Handle transport errors like RemoteDisconnected
+                if "RemoteDisconnected" in str(e) or "Connection" in str(e):
+                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
+                    self._last_521_by_key[key] = time.time()
+                    self._cooldown_by_key[key] = backoff
+                    logger.warning(f"🔌 Connection error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        raise Exception(f"Request to {key} exhausted retries after connection errors")
+                else:
                     raise
-                # For firewall errors, continue to retry
-                continue
+            except Exception as e:
+                # For unexpected errors, raise immediately
+                logger.error(f"❌ Request to {key} failed: {str(e)}")
+                raise
         
-        # Defensive fallback - should not reach here due to retry loop logic
-        raise Exception(f"Request failed after {max_retries} retries with exponential backoff (60s, 120s, 240s)")
+        # Should not reach here due to retry loop logic
+        raise Exception(f"Request to {key} exhausted retries")
 
     # -------------------------------------------------------------------------
     # CRITICAL FIX 1: Market K-Lines (Returns Numbers, not Strings)
