@@ -354,7 +354,7 @@ class WEEXv2Client:
         # Try to find in map
         if clean_sym in self._contract_map:
             exchange_sym = self._contract_map[clean_sym]
-            logger.debug(f"Resolved symbol: {clean_sym} → {exchange_sym}")
+            logger.info(f"Resolved symbol: {clean_sym} → {exchange_sym}")
             return exchange_sym
         
         # Fallback: use _UMCBL suffix (most common for WEEX V2 perpetual contracts)
