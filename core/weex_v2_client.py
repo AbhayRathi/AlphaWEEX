@@ -74,6 +74,8 @@ class WEEXv2Client:
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
         })
         
@@ -81,6 +83,12 @@ class WEEXv2Client:
         self.api_delay = float(os.getenv("WEEX_API_DELAY", "0"))
         self._cooldown_base = int(os.getenv("WEEX_521_BASE_BACKOFF", "10"))
         self._cooldown_cap = int(os.getenv("WEEX_521_MAX_BACKOFF", "60"))
+        self._jitter_min = float(os.getenv("WEEX_521_MIN_JITTER", "5"))
+        self._jitter_max = float(os.getenv("WEEX_521_MAX_JITTER", "25"))
+        
+        # TTL cache for pending-orders to reduce API calls
+        self._cache: Dict[str, tuple] = {}  # {key: (data, expiry_time)}
+        self._pending_orders_ttl = float(os.getenv("WEEX_PENDING_ORDERS_TTL", "10"))
         
         # Cloudflare 521 Hardening: Per-route(+symbol) cooldown tracking
         self._cooldown_by_key: Dict[str, float] = {}
@@ -798,7 +806,7 @@ class WEEXv2Client:
                 
                 # Handle 521 errors with per-key cooldown
                 if response.status_code == 521:
-                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
+                    backoff = self._calculate_backoff(attempt, self._jitter_min, self._jitter_max)
                     self._last_521_by_key[key] = time.time()
                     self._cooldown_by_key[key] = backoff
                     logger.warning(f"🔥 521 Error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")
@@ -823,7 +831,7 @@ class WEEXv2Client:
             except (requests.exceptions.ConnectionError, ConnectionResetError) as e:
                 # Handle transport errors like RemoteDisconnected
                 if "RemoteDisconnected" in str(e) or "Connection" in str(e):
-                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
+                    backoff = self._calculate_backoff(attempt, self._jitter_min, self._jitter_max)
                     self._last_521_by_key[key] = time.time()
                     self._cooldown_by_key[key] = backoff
                     logger.warning(f"🔌 Connection error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")
@@ -1289,10 +1297,83 @@ class WEEXv2Client:
             logger.error(f"Failed to get account assets: {str(e)}")
             return 0.0
     
+    def _cache_get(self, key: str):
+        """
+        Get a value from the TTL cache if it exists and hasn't expired.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached data if valid, None otherwise
+        """
+        item = self._cache.get(key)
+        if not item:
+            return None
+        data, exp = item
+        if exp > time.time():
+            return data
+        # Clean up expired entry to prevent unbounded cache growth
+        self._cache.pop(key, None)
+        return None
+    
+    def _cache_put(self, key: str, data, ttl: float = None):
+        """
+        Store a value in the TTL cache.
+        
+        Args:
+            key: Cache key
+            data: Data to cache
+            ttl: Time-to-live in seconds (defaults to pending_orders_ttl)
+        """
+        ttl = self._pending_orders_ttl if ttl is None else ttl
+        self._cache[key] = (data, time.time() + ttl)
+    
+    def get_pending_orders_cached(self, productType: str = "umcbl"):
+        """
+        Get pending orders with TTL caching and cooldown-aware reuse.
+        
+        On successful fetch, caches the result. On cooldown or transient errors,
+        returns the last cached snapshot if available.
+        
+        Args:
+            productType: Product type (default: "umcbl")
+            
+        Returns:
+            Pending orders data (dict or list), or empty list on failure
+        """
+        key = f"pending-orders:{productType}"
+        snap = self._cache_get(key)
+        if snap is not None:
+            logger.debug("📦 Using cached pending-orders data")
+            return snap
+        
+        path = f"/capi/v2/positions/pending-orders?productType={productType}"
+        try:
+            resp = self.send_weex_request("GET", path)
+            if resp and resp.status_code == 200:
+                data = resp.json()
+                self._cache_put(key, data)
+                return data
+        except Exception as e:
+            # If route is cooling down or transient error, reuse last snapshot if available
+            # Check for expired cache entry to use as stale fallback
+            item = self._cache.get(key)
+            if item:
+                stale_data, _ = item
+                logger.info(f"📦 Reusing stale pending-orders cache due to: {e}")
+                return stale_data
+            logger.warning(f"pending-orders fetch failed: {e}")
+            return []
+        return []
+    
     def _calculate_liquid_capital(self, available: float) -> float:
         """
         AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
-        of all active trades from available balance
+        of all active trades from available balance.
+        
+        Uses cached pending-orders data to reduce API calls.
+        Supports tolerant shapes (dict with data.positions, list, or other variants).
         
         Args:
             available: Available balance from exchange
@@ -1300,33 +1381,50 @@ class WEEXv2Client:
         Returns:
             Liquid capital available for new trades
         """
-        try:
-            # Query all open positions to get their initial margin
-            path = "/capi/v2/positions/pending-orders?productType=umcbl"
-            response = self.send_weex_request("GET", path)
-            
-            if response and response.status_code == 200:
-                data = response.json()
-                positions = data.get('data', {}).get('positions', [])
-                
-                total_initial_margin = 0.0
-                for pos in positions:
-                    try:
-                        # Extract initial margin for each active position
-                        initial_margin = float(pos.get('initialMargin', 0) or pos.get('margin', 0) or 0)
-                        total_initial_margin += initial_margin
-                    except (ValueError, TypeError):
-                        continue
-                
-                liquid = available - total_initial_margin
-                logger.info(f"💧 Liquid Capital: ${liquid:.2f} (Available: ${available:.2f} - Initial Margin: ${total_initial_margin:.2f})")
-                return max(0.0, liquid)  # Never return negative
-            
-            # If API call fails, return available as-is
+        # Optional kill-switch for testing/emergency
+        if os.getenv("WEEX_DISABLE_LIQUID_CAPITAL", "false").lower() in ("1", "true", "yes"):
+            logger.info("💧 Liquid capital calc disabled (WEEX_DISABLE_LIQUID_CAPITAL=true); using available.")
             return available
+        
+        try:
+            # Use cached pending-orders to reduce API calls
+            raw = self.get_pending_orders_cached(productType="umcbl")
+            
+            # Normalize to a list of positions (tolerant of various response shapes)
+            positions = []
+            if isinstance(raw, dict):
+                # Try various known shapes independently: data.positions, positions, list
+                data_obj = raw.get("data")
+                if isinstance(data_obj, dict) and data_obj.get("positions"):
+                    positions = data_obj.get("positions", [])
+                elif raw.get("positions"):
+                    positions = raw.get("positions", [])
+                elif raw.get("list"):
+                    positions = raw.get("list", [])
+            elif isinstance(raw, list):
+                positions = raw
+            
+            reserved = 0.0
+            for p in positions:
+                try:
+                    # Support multiple field names for initial margin with explicit None checks
+                    margin_val = p.get("initialMargin")
+                    if margin_val is None:
+                        margin_val = p.get("initMargin")
+                    if margin_val is None:
+                        margin_val = p.get("margin")
+                    if margin_val is None:
+                        margin_val = 0
+                    reserved += float(margin_val)
+                except (TypeError, ValueError):
+                    continue
+            
+            liquid = max(0.0, available - reserved)
+            logger.info(f"💧 Liquid Capital: ${liquid:.2f} (Available: ${available:.2f} - Reserved: ${reserved:.2f})")
+            return liquid
             
         except Exception as e:
-            logger.warning(f"⚠️ Failed to calculate liquid capital: {str(e)}, using available balance")
+            logger.warning(f"⚠️ Failed liquid capital calc: {e}, using available balance")
             return available
         
     def set_leverage(self, symbol: str, leverage: int = 20, margin_mode: str = "isolated") -> bool:
