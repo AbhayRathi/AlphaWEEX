@@ -223,12 +223,21 @@ class WEEXv2Client:
     
     def clean_symbol(self, symbol: Optional[str]) -> str:
         """
-        Clean symbol for API calls: remove 'cmt_' prefix (case-insensitive) and convert to UPPERCASE
+        Clean symbol for API calls: remove 'cmt_' prefix and exchange suffixes, convert to UPPERCASE
+        
+        Handles:
+        - cmt_btcusdt -> BTCUSDT
+        - BTCUSDT_UMCBL -> BTCUSDT
+        - btcusdt -> BTCUSDT
         """
         if not symbol:
             return ""
         # Remove cmt_ prefix (case-insensitive) and convert to uppercase
         cleaned = symbol.lower().replace('cmt_', '').upper()
+        # Remove common exchange suffixes to get internal symbol
+        for suffix in ['_UMCBL', '-PERP', '_PERP']:
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[:-len(suffix)]
         return cleaned
     
     def _path_base(self, path: str) -> str:
