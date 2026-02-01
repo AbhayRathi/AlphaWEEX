@@ -1,0 +1,100 @@
+API returned error code: None, message: No error message provided
+======================================================================
+DIAGNOSTIC: Raw API Response from /capi/v2/account/getAccounts
+======================================================================
+✅ Credentials loaded
+   API_KEY: weex_d44***
+
+📡 Making API call to /capi/v2/account/getAccounts...
+
+Status Code: 200
+✅ Status 200 OK
+Response Type: dict
+
+======================================================================
+FULL RAW RESPONSE:
+======================================================================
+{
+  "account": {
+    "defaultFeeSetting": {
+      "is_set_fee_rate": true,
+      "taker_fee_rate": "0.00040000",
+      "maker_fee_rate": "0.00010000",
+      "is_set_fee_discount": false,
+      "fee_discount": "0",
+      "is_set_taker_maker_fee_discount": false,
+      "taker_fee_discount": "0",
+      "maker_fee_discount": "0"
+    },
+    "feeSetting": [],
+    "modeSetting": [],
+    "leverageSetting": [
+      {
+        "symbol": "cmt_btcusdt",
+        "isolated_long_leverage": "20.00",
+        "isolated_short_leverage": "20.00",
+        "cross_leverage": "20.00"
+      },
+      {
+        "symbol": "cmt_ethusdt",
+        "isolated_long_leverage": "20.00",
+        "isolated_short_leverage": "20.00",
+        "cross_leverage": "20.00"
+      }
+    ],
+    "createOrderRateLimitPerMinute": 0,
+    "createOrderDelayMilliseconds": 0,
+    "createdTime": 1767160067491,
+    "updatedTime": 1768914972944
+  },
+  "collateral": [
+    {
+      "coin": "USDT",
+      "marginMode": "SHARED",
+      "crossSymbol": null,
+      "isolatedPositionId": 0,
+      "amount": "887.60905771",
+      "pending_deposit_amount": "0.00000000",
+      "pending_withdraw_amount": "0.00000000",
+      "pending_transfer_in_amount": "0",
+      "pending_transfer_out_amount": "0",
+      "is_liquidating": false,
+      "legacy_amount": "887.60905771",
+      "cum_deposit_amount": "2000.00000000",
+      "cum_withdraw_amount": "999.78254676",
+      "cum_transfer_in_amount": "0",
+      "cum_transfer_out_amount": "0",
+      "cum_margin_move_in_amount": "0",
+      "cum_margin_move_out_amount": "0",
+      "cum_position_open_long_amount": "32244.50714",
+      "cum_position_open_short_amount": "0",
+      "cum_position_close_long_amount": "32162.59804000",
+      "cum_position_close_short_amount": "0",
+      "cum_position_fill_fee_amount": "0.94393435",
+      "cum_position_liquidate_fee_amount": "0",
+      "cum_position_funding_amount": "-4.93369450",
+      "cum_order_fill_fee_income_amount": "0",
+      "cum_order_liquidate_fee_income_amount": "0",
+      "created_time": 1767189754599,
+      "updated_time": 1769190847528
+    }
+  ],
+  "version": null
+}
+======================================================================
+
+📊 ANALYSIS:
+======================================================================
+Response is DICT
+Keys: ['account', 'collateral', 'version']
+
+
+======================================================================
+Testing get_account_assets():
+======================================================================
+Result: $0.00
+❌ FAILED - Method returned 0.0
+
+======================================================================
+END DIAGNOSTIC
+======================================================================

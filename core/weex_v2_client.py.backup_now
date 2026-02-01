@@ -593,12 +593,12 @@ class WEEXv2Client:
                         # Ensure we are looking at the USDT wallet
                         # Check both coin_id (value "2") and coinName (value "USDT")
                         is_usdt = (str(item.get('coin_id')) == "2" or 
-                                   str(item.get('coin', '')).upper() == "USDT" or str(item.get('coinName', '')).upper() == "USDT")
+                                   str(item.get('coinName', '')).upper() == "USDT")
                         if is_usdt:
                             # Comprehensive equity key checking: try totalEquity, equity, accountEquity, available
                             equity = 0.0  # Default to 0.0 if no valid value found
                             found_value = False  # Track if we found any valid value
-                            for key in ['totalEquity', 'equity', 'accountEquity', 'available', 'amount', 'legacy_amount']:
+                            for key in ['totalEquity', 'equity', 'accountEquity', 'available']:
                                 if key in item and item[key] is not None:
                                     try:
                                         value = float(item[key])
@@ -715,25 +715,6 @@ class WEEXv2Client:
             if res and res.status_code == 200:
                 response_data = res.json()
                 
-                
-                # WEEX V2: Check collateral format first
-                if isinstance(response_data, dict) and "collateral" in response_data:
-                    for item in response_data.get("collateral", []):
-                        if item.get("coin") == "USDT":
-                            equity = float(item.get("amount") or item.get("legacy_amount") or "0")
-                            logger.info(f"💰 USDT Equity: ${equity:.2f}")
-                            return equity
-                    return 0.0
-                
-                    # WEEX V2: Check collateral format
-                    if isinstance(response_data, dict) and "collateral" in response_data:
-                        for item in response_data.get("collateral", []):
-                            if item.get("coin") == "USDT":
-                                equity = float(item.get("amount") or item.get("legacy_amount") or "0")
-                                return {"totalEquity": equity, "equity": equity}
-                        logger.warning("No USDT in collateral")
-                        return None
-                    
                 # Handle both response formats: raw list or dict with "data" key
                 accounts_list = []
                 if isinstance(response_data, list):

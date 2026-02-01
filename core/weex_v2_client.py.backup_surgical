@@ -593,12 +593,12 @@ class WEEXv2Client:
                         # Ensure we are looking at the USDT wallet
                         # Check both coin_id (value "2") and coinName (value "USDT")
                         is_usdt = (str(item.get('coin_id')) == "2" or 
-                                   str(item.get('coin', '')).upper() == "USDT" or str(item.get('coinName', '')).upper() == "USDT")
+                                   str(item.get('coinName', '')).upper() == "USDT")
                         if is_usdt:
                             # Comprehensive equity key checking: try totalEquity, equity, accountEquity, available
                             equity = 0.0  # Default to 0.0 if no valid value found
                             found_value = False  # Track if we found any valid value
-                            for key in ['totalEquity', 'equity', 'accountEquity', 'available', 'amount', 'legacy_amount']:
+                            for key in ['totalEquity', 'equity', 'accountEquity', 'available']:
                                 if key in item and item[key] is not None:
                                     try:
                                         value = float(item[key])

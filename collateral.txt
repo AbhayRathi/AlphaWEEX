@@ -1,0 +1,52 @@
+=== COLLATERAL ARRAY ===
+  "collateral": [
+    {
+      "coin": "USDT",
+      "marginMode": "SHARED",
+      "crossSymbol": null,
+      "isolatedPositionId": 0,
+      "amount": "887.60905771",
+      "pending_deposit_amount": "0.00000000",
+      "pending_withdraw_amount": "0.00000000",
+      "pending_transfer_in_amount": "0",
+      "pending_transfer_out_amount": "0",
+      "is_liquidating": false,
+      "legacy_amount": "887.60905771",
+      "cum_deposit_amount": "2000.00000000",
+      "cum_withdraw_amount": "999.78254676",
+      "cum_transfer_in_amount": "0",
+      "cum_transfer_out_amount": "0",
+      "cum_margin_move_in_amount": "0",
+      "cum_margin_move_out_amount": "0",
+      "cum_position_open_long_amount": "32244.50714",
+      "cum_position_open_short_amount": "0",
+      "cum_position_close_long_amount": "32162.59804000",
+      "cum_position_close_short_amount": "0",
+      "cum_position_fill_fee_amount": "0.94393435",
+      "cum_position_liquidate_fee_amount": "0",
+      "cum_position_funding_amount": "-4.93369450",
+      "cum_order_fill_fee_income_amount": "0",
+      "cum_order_liquidate_fee_income_amount": "0",
+      "created_time": 1767189754599,
+      "updated_time": 1769190847528
+    }
+  ],
+  "version": null
+}
+======================================================================
+
+📊 ANALYSIS:
+======================================================================
+Response is DICT
+Keys: ['account', 'collateral', 'version']
+
+
+======================================================================
+Testing get_account_assets():
+======================================================================
+Result: $0.00
+❌ FAILED - Method returned 0.0
+
+======================================================================
+END DIAGNOSTIC
+======================================================================
