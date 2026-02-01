@@ -1311,7 +1311,11 @@ class WEEXv2Client:
         if not item:
             return None
         data, exp = item
-        return data if exp > time.time() else None
+        if exp > time.time():
+            return data
+        # Clean up expired entry to prevent unbounded cache growth
+        self._cache.pop(key, None)
+        return None
     
     def _cache_put(self, key: str, data, ttl: float = None):
         """
@@ -1389,16 +1393,29 @@ class WEEXv2Client:
             # Normalize to a list of positions (tolerant of various response shapes)
             positions = []
             if isinstance(raw, dict):
-                # Try various known shapes: data.positions, positions, list
-                positions = raw.get("data", {}).get("positions", []) or raw.get("positions", []) or raw.get("list", [])
+                # Try various known shapes independently: data.positions, positions, list
+                data_obj = raw.get("data")
+                if isinstance(data_obj, dict) and data_obj.get("positions"):
+                    positions = data_obj.get("positions", [])
+                elif raw.get("positions"):
+                    positions = raw.get("positions", [])
+                elif raw.get("list"):
+                    positions = raw.get("list", [])
             elif isinstance(raw, list):
                 positions = raw
             
             reserved = 0.0
             for p in positions:
                 try:
-                    # Support multiple field names for initial margin
-                    reserved += float(p.get("initialMargin") or p.get("initMargin") or p.get("margin") or 0)
+                    # Support multiple field names for initial margin with explicit None checks
+                    margin_val = p.get("initialMargin")
+                    if margin_val is None:
+                        margin_val = p.get("initMargin")
+                    if margin_val is None:
+                        margin_val = p.get("margin")
+                    if margin_val is None:
+                        margin_val = 0
+                    reserved += float(margin_val)
                 except (TypeError, ValueError):
                     continue
             

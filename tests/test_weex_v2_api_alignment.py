@@ -749,9 +749,15 @@ class TestJitterEnvConfiguration:
     
     def test_jitter_defaults(self):
         """Test default jitter values when env vars not set"""
-        # Save original values
-        orig_min = os.environ.pop('WEEX_521_MIN_JITTER', None)
-        orig_max = os.environ.pop('WEEX_521_MAX_JITTER', None)
+        # Save original values using get() instead of pop() for cleaner handling
+        orig_min = os.environ.get('WEEX_521_MIN_JITTER')
+        orig_max = os.environ.get('WEEX_521_MAX_JITTER')
+        
+        # Temporarily remove env vars if they exist
+        if orig_min is not None:
+            del os.environ['WEEX_521_MIN_JITTER']
+        if orig_max is not None:
+            del os.environ['WEEX_521_MAX_JITTER']
         
         try:
             client = WEEXv2Client("test_key", "test_secret", "test_pass")
