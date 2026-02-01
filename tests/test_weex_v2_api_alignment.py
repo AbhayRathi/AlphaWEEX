@@ -7,6 +7,7 @@ Tests cover:
 3. Leverage endpoint path
 4. Integer types for leverage and marginMode
 """
+import os
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from core.weex_v2_client import WEEXv2Client
@@ -561,6 +562,226 @@ class TestGetAccountAssets:
         
         # Verify returns 0.0 when USDT not found
         assert result == 0.0
+
+
+class TestPendingOrdersCache:
+    """Test pending-orders TTL cache and cooldown-aware reuse"""
+    
+    def test_pending_orders_cache_uses_snapshot_on_cooldown(self):
+        """Test that get_pending_orders_cached reuses cached snapshot on cooldown error"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Seed cache with a fake snapshot
+        fake_snapshot = {"data": {"positions": [{"initialMargin": "10.5"}]}}
+        client._cache_put("pending-orders:umcbl", fake_snapshot)
+        
+        # Simulate send_weex_request raising "Cooldown active" exception
+        with patch.object(WEEXv2Client, 'send_weex_request') as mock_send:
+            mock_send.side_effect = Exception("Cooldown active for /capi/v2/positions/pending-orders: 15.2s remaining")
+            
+            # Should return cached snapshot (no exception raised)
+            result = client.get_pending_orders_cached(productType="umcbl")
+            
+            assert result == fake_snapshot
+            assert result["data"]["positions"][0]["initialMargin"] == "10.5"
+    
+    def test_pending_orders_cache_returns_empty_on_error_without_cache(self):
+        """Test that get_pending_orders_cached returns empty list on error with no cache"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # No cache seeded - should return empty list on error
+        with patch.object(WEEXv2Client, 'send_weex_request') as mock_send:
+            mock_send.side_effect = Exception("Network error")
+            
+            result = client.get_pending_orders_cached(productType="umcbl")
+            
+            assert result == []
+    
+    def test_pending_orders_cache_stores_on_success(self):
+        """Test that successful fetch stores data in cache"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": {"positions": [{"initialMargin": "25.0"}]}}
+        
+        with patch.object(WEEXv2Client, 'send_weex_request') as mock_send:
+            mock_send.return_value = mock_response
+            
+            result = client.get_pending_orders_cached(productType="umcbl")
+            
+            assert result == {"data": {"positions": [{"initialMargin": "25.0"}]}}
+            
+            # Verify cache was populated
+            cached = client._cache_get("pending-orders:umcbl")
+            assert cached == {"data": {"positions": [{"initialMargin": "25.0"}]}}
+    
+    def test_pending_orders_cache_ttl_expiry(self):
+        """Test that cache expires after TTL"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        client._pending_orders_ttl = 0.1  # 100ms TTL for testing
+        
+        # Seed cache
+        client._cache_put("pending-orders:umcbl", {"test": "data"})
+        
+        # Should return cached data immediately
+        assert client._cache_get("pending-orders:umcbl") == {"test": "data"}
+        
+        # Wait for TTL to expire
+        import time
+        time.sleep(0.15)
+        
+        # Should return None after expiry
+        assert client._cache_get("pending-orders:umcbl") is None
+
+
+class TestLiquidCapitalTolerantShapes:
+    """Test _calculate_liquid_capital with various response shapes"""
+    
+    def test_liquid_capital_dict_with_data_positions(self):
+        """Test liquid capital with dict containing data.positions shape"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock get_pending_orders_cached to return dict with data.positions
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.return_value = {
+                "data": {
+                    "positions": [
+                        {"initialMargin": "10.0"},
+                        {"initialMargin": "15.5"}
+                    ]
+                }
+            }
+            
+            result = client._calculate_liquid_capital(100.0)
+            
+            # 100.0 - (10.0 + 15.5) = 74.5
+            assert result == 74.5
+    
+    def test_liquid_capital_list_format(self):
+        """Test liquid capital with raw list response format"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock get_pending_orders_cached to return list directly
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.return_value = [
+                {"initialMargin": "5.0"},
+                {"initMargin": "3.5"}  # Different field name
+            ]
+            
+            result = client._calculate_liquid_capital(50.0)
+            
+            # 50.0 - (5.0 + 3.5) = 41.5
+            assert result == 41.5
+    
+    def test_liquid_capital_dict_with_positions_key(self):
+        """Test liquid capital with dict containing positions key directly"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.return_value = {
+                "positions": [
+                    {"margin": "8.0"}  # Uses 'margin' field name
+                ]
+            }
+            
+            result = client._calculate_liquid_capital(30.0)
+            
+            # 30.0 - 8.0 = 22.0
+            assert result == 22.0
+    
+    def test_liquid_capital_clamps_to_zero(self):
+        """Test liquid capital never returns negative"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.return_value = [
+                {"initialMargin": "200.0"}  # More than available
+            ]
+            
+            result = client._calculate_liquid_capital(100.0)
+            
+            # Should clamp to 0, not -100
+            assert result == 0.0
+    
+    def test_liquid_capital_fallback_on_error(self):
+        """Test liquid capital returns available on error"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.side_effect = Exception("Unexpected error")
+            
+            result = client._calculate_liquid_capital(75.0)
+            
+            # Should fallback to available balance
+            assert result == 75.0
+    
+    def test_liquid_capital_disabled_via_env(self):
+        """Test liquid capital can be disabled via environment variable"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.dict('os.environ', {'WEEX_DISABLE_LIQUID_CAPITAL': 'true'}):
+            # Should return available directly without calling pending-orders
+            with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+                result = client._calculate_liquid_capital(100.0)
+                
+                # Should not call get_pending_orders_cached
+                mock_cached.assert_not_called()
+                
+                # Should return available directly
+                assert result == 100.0
+    
+    def test_liquid_capital_handles_empty_positions(self):
+        """Test liquid capital handles empty positions list"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            mock_cached.return_value = {"data": {"positions": []}}
+            
+            result = client._calculate_liquid_capital(50.0)
+            
+            # No positions = no reserved margin
+            assert result == 50.0
+
+
+class TestJitterEnvConfiguration:
+    """Test that jitter values are configurable via environment variables"""
+    
+    def test_jitter_defaults(self):
+        """Test default jitter values when env vars not set"""
+        # Save original values
+        orig_min = os.environ.pop('WEEX_521_MIN_JITTER', None)
+        orig_max = os.environ.pop('WEEX_521_MAX_JITTER', None)
+        
+        try:
+            client = WEEXv2Client("test_key", "test_secret", "test_pass")
+            
+            assert client._jitter_min == 5.0
+            assert client._jitter_max == 25.0
+        finally:
+            # Restore original values if they existed
+            if orig_min is not None:
+                os.environ['WEEX_521_MIN_JITTER'] = orig_min
+            if orig_max is not None:
+                os.environ['WEEX_521_MAX_JITTER'] = orig_max
+    
+    def test_jitter_from_env(self):
+        """Test jitter values from environment variables"""
+        with patch.dict('os.environ', {
+            'WEEX_521_MIN_JITTER': '3.0',
+            'WEEX_521_MAX_JITTER': '15.0'
+        }):
+            client = WEEXv2Client("test_key", "test_secret", "test_pass")
+            
+            assert client._jitter_min == 3.0
+            assert client._jitter_max == 15.0
+    
+    def test_pending_orders_ttl_from_env(self):
+        """Test pending orders TTL from environment variable"""
+        with patch.dict('os.environ', {'WEEX_PENDING_ORDERS_TTL': '30'}):
+            client = WEEXv2Client("test_key", "test_secret", "test_pass")
+            
+            assert client._pending_orders_ttl == 30.0
 
 
 if __name__ == "__main__":
