@@ -47,6 +47,12 @@ class WEEXv2Client:
     INITIAL_SL_SHORT_PCT = 0.40  # Initial stop loss for shorts (0.40% - tighter)
     BREAKEVEN_SL_PCT = 0.0  # Break-even stop after first partial
     
+    # Cloudflare 521 Hardening: Jitter bounds for backoff calculations
+    JITTER_521_MIN = 5.0    # Minimum jitter for 521 errors (seconds)
+    JITTER_521_MAX = 25.0   # Maximum jitter for 521 errors (seconds)
+    JITTER_TIMEOUT_MIN = 0.5  # Minimum jitter for timeout errors (seconds)
+    JITTER_TIMEOUT_MAX = 2.5  # Maximum jitter for timeout errors (seconds)
+    
     def __init__(self, api_key: str, api_secret: str, api_password: str):
         """
         Initialize WEEX v2 Client
@@ -245,6 +251,22 @@ class WEEXv2Client:
         dur = self._cooldown_by_key.get(key, 0.0)
         return max(0.0, (last + dur) - time.time())
     
+    def _calculate_backoff(self, attempt: int, jitter_min: float, jitter_max: float) -> float:
+        """
+        Cloudflare 521 Hardening: Calculate backoff time with jittered exponential backoff.
+        
+        Args:
+            attempt: Current retry attempt number (0-indexed)
+            jitter_min: Minimum jitter to add (seconds)
+            jitter_max: Maximum jitter to add (seconds)
+            
+        Returns:
+            float: Backoff time in seconds
+        """
+        base_backoff = min(self._cooldown_base * (2 ** attempt), self._cooldown_cap)
+        jitter = random.uniform(jitter_min, jitter_max)
+        return base_backoff + jitter
+    
     def generate_signature(self, timestamp: str, method: str, request_path: str, 
                            query_string: str, body_str: str) -> str:
         # Ensure method is UPPERCASE
@@ -350,7 +372,7 @@ class WEEXv2Client:
                 
                 # Handle 521 errors with per-key cooldown
                 if response.status_code == 521:
-                    backoff = min(self._cooldown_base * (2 ** attempt), self._cooldown_cap) + random.uniform(5, 25)
+                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
                     self._last_521_by_key[key] = time.time()
                     self._cooldown_by_key[key] = backoff
                     logger.warning(f"🔥 521 Error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")
@@ -361,7 +383,7 @@ class WEEXv2Client:
                 
                 # Handle timeout errors (408, 522, 524) with immediate backoff
                 if response.status_code in (408, 522, 524):
-                    backoff = min(self._cooldown_base * (2 ** attempt), self._cooldown_cap) + random.uniform(0.5, 2.5)
+                    backoff = self._calculate_backoff(attempt, self.JITTER_TIMEOUT_MIN, self.JITTER_TIMEOUT_MAX)
                     logger.warning(f"⏱️ Timeout {response.status_code} for {key}! Attempt {attempt + 1}/{max_retries}, backoff: {backoff:.1f}s")
                     time.sleep(backoff)
                     if attempt < max_retries - 1:
@@ -375,7 +397,7 @@ class WEEXv2Client:
             except (requests.exceptions.ConnectionError, ConnectionResetError) as e:
                 # Handle transport errors like RemoteDisconnected
                 if "RemoteDisconnected" in str(e) or "Connection" in str(e):
-                    backoff = min(self._cooldown_base * (2 ** attempt), self._cooldown_cap) + random.uniform(5, 25)
+                    backoff = self._calculate_backoff(attempt, self.JITTER_521_MIN, self.JITTER_521_MAX)
                     self._last_521_by_key[key] = time.time()
                     self._cooldown_by_key[key] = backoff
                     logger.warning(f"🔌 Connection error for {key}! Attempt {attempt + 1}/{max_retries}, cooldown: {backoff:.1f}s")

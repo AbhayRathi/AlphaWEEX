@@ -401,8 +401,7 @@ WEEX_521_MAX_BACKOFF=45             # Maximum backoff cap (seconds)
 # Leverage initialization
 WEEX_DISABLE_LEVERAGE_INIT=true     # Skip leverage init to reduce 404 noise
 
-# Optional: TLS impersonation (requires curl_cffi package)
-USE_CURL_CFFI=false                 # Use curl_cffi for advanced TLS handling
+# Note: USE_CURL_CFFI is reserved for future TLS impersonation feature (not yet implemented)
 ```
 
 **How it works:**
