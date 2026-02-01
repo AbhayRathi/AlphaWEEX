@@ -193,7 +193,7 @@ class WEEXv2Client:
     
     def _extract_internal_key(self, contract: Dict[str, Any]) -> Optional[str]:
         """
-        Extract internal symbol key from contract data
+        Extract internal symbol key from contract data with tolerant field parsing
         
         Args:
             contract: Contract data dict from API response
@@ -206,19 +206,27 @@ class WEEXv2Client:
         2. Otherwise, extract from exchange symbol by removing suffixes:
            - BTCUSDT_UMCBL -> BTCUSDT
            - BTCUSDT-PERP -> BTCUSDT
+        
+        Tolerates field variations:
+        - Base: baseCoin, base, baseCurrency
+        - Quote: quoteCoin, quote, quoteCurrency
+        - Symbol: symbol, contractSymbol, symbolName, productId
         """
         # Try to extract base and quote coins (most reliable)
-        base = contract.get('baseCoin', '')
-        quote = contract.get('quoteCoin', '')
+        # Tolerate field variations
+        base = contract.get('baseCoin') or contract.get('base') or contract.get('baseCurrency') or ''
+        quote = contract.get('quoteCoin') or contract.get('quote') or contract.get('quoteCurrency') or ''
         
         if base and quote:
             # Normalize to uppercase and concatenate
             return f"{base.upper()}{quote.upper()}"
         
         # Fallback: extract from exchange symbol
+        # Tolerate multiple field names for the exchange symbol
         exchange_symbol = (contract.get('symbol') or 
                           contract.get('contractSymbol') or 
-                          contract.get('productId', ''))
+                          contract.get('symbolName') or
+                          contract.get('productId') or '')
         
         if not exchange_symbol:
             return None
@@ -238,7 +246,7 @@ class WEEXv2Client:
     
     def load_contracts(self) -> Dict[str, str]:
         """
-        Load contract discovery data from WEEX V2 API
+        Load contract discovery data from WEEX V2 API with tolerant parsing
         
         Tries endpoints in order:
         1. /capi/v2/market/contracts?productType=umcbl
@@ -247,9 +255,24 @@ class WEEXv2Client:
         Builds mapping: internal symbol (BTCUSDT) -> exchange symbol (BTCUSDT_UMCBL)
         Caches result for 60 minutes.
         
+        Supports WEEX_CONTRACT_MAP_OVERRIDE env var for CI/testing:
+        Set to JSON string like: {"BTCUSDT":"BTCUSDT_UMCBL","ETHUSDT":"ETHUSDT_UMCBL"}
+        
         Returns:
             Dict mapping internal symbols to exchange symbols
         """
+        # Check for CI override first
+        override = os.getenv("WEEX_CONTRACT_MAP_OVERRIDE")
+        if override:
+            try:
+                override_map = json.loads(override)
+                self._contract_map = override_map
+                self._contract_map_timestamp = time.time()
+                logger.info(f"✅ Using contract map override ({len(override_map)} symbols)")
+                return override_map
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ Failed to parse WEEX_CONTRACT_MAP_OVERRIDE: {e}")
+        
         # Check if cache is still fresh
         now = time.time()
         if self._contract_map and (now - self._contract_map_timestamp) < self._contract_map_ttl:
@@ -281,17 +304,21 @@ class WEEXv2Client:
                         logger.warning(f"⚠️ No contracts returned from {endpoint}")
                         continue
                     
-                    # Build mapping
+                    # Build mapping with tolerant field parsing
                     contract_map = {}
                     for contract in contracts:
                         internal_key = self._extract_internal_key(contract)
                         if internal_key:
-                            # Extract symbol/contractSymbol/productId
+                            # Extract exchange symbol with field name tolerance
                             exchange_symbol = (contract.get('symbol') or 
                                               contract.get('contractSymbol') or 
+                                              contract.get('symbolName') or
                                               contract.get('productId'))
                             if exchange_symbol:
                                 contract_map[internal_key] = exchange_symbol
+                            else:
+                                # If no exchange symbol found, use fallback
+                                contract_map[internal_key] = f"{internal_key}_UMCBL"
                     
                     if contract_map:
                         self._contract_map = contract_map
@@ -333,7 +360,7 @@ class WEEXv2Client:
         # Fallback: use _UMCBL suffix (most common for WEEX V2 perpetual contracts)
         # Note: WEEX V2 uses BTCUSDT_UMCBL format for USDT-margined perpetual contracts
         exchange_sym = f"{clean_sym}_UMCBL"
-        logger.info(f"Resolved symbol (fallback): {clean_sym} → {exchange_sym}")
+        logger.warning(f"⚠️ Symbol not in contract map, using fallback: {clean_sym} → {exchange_sym}")
         return exchange_sym
     
     def round_qty(self, symbol: str, qty: float) -> float:
@@ -368,24 +395,29 @@ class WEEXv2Client:
         precision = self.precision_map.get(symbol.lower(), 2)
         return round(rounded, precision)
     
-    def _cooldown_key(self, path: str, payload: Optional[dict]) -> str:
+    def _cooldown_key(self, path: str, query_params: str = "", payload: Optional[dict] = None) -> str:
         """
-        Cloudflare 521 Hardening: Generate cooldown key from path and symbol.
+        Cloudflare 521 Hardening: Generate cooldown key from path, query params, and symbol.
         
         Args:
             path: API endpoint path
+            query_params: Query parameters string
             payload: Request payload (dict or None)
             
         Returns:
-            str: Cooldown key in format "path" or "path:SYMBOL"
+            str: Cooldown key in format "path?query" or "path?query:SYMBOL"
         """
-        key = path
+        # Include query params in the key for more specific scoping
+        key = f"{path}{query_params}" if query_params else path
+        
         try:
+            # Add symbol from payload if present for even finer scoping
             if isinstance(payload, dict) and payload.get("symbol"):
-                key = f"{path}:{str(payload['symbol']).upper()}"
+                key = f"{key}:{str(payload['symbol']).upper()}"
         except (KeyError, AttributeError, TypeError) as e:
-            # Log but don't fail - just use path without symbol
+            # Log but don't fail - just use path+query without symbol
             logger.debug(f"Could not extract symbol from payload for cooldown key: {e}")
+        
         return key
     
     def _cooldown_remaining(self, key: str) -> float:
@@ -460,7 +492,7 @@ class WEEXv2Client:
         """
         # Prepare payload for cooldown key generation
         payload = body if isinstance(body, dict) else None
-        key = self._cooldown_key(path, payload)
+        key = self._cooldown_key(path, query_params, payload)
         
         for attempt in range(max_retries):
             # Check per-route cooldown
