@@ -270,7 +270,7 @@ class TestWEEXv2Client:
         mock_response_fail = Mock()
         mock_response_fail.status_code = 400
         mock_response_fail.text = "Invalid request"
-        mock_response_fail.json.return_value = {'code': '40001', 'message': 'Invalid request'}
+        mock_response_fail.json.return_value = {'code': '40001', 'msg': 'Invalid request'}
         
         # Patch the session.get method to return error response
         with patch.object(client.session, 'get', return_value=mock_response_fail) as mock_get:

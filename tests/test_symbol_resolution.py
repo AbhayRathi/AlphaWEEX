@@ -421,12 +421,16 @@ class TestSymbolHelperMethods:
         assert client._to_cmt("ETHUSDT") == "cmt_ethusdt"
     
     def test_to_plain(self):
-        """Test _to_plain converts to uppercase"""
+        """Test _to_plain converts to uppercase and strips exchange suffixes"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         
         assert client._to_plain("btcusdt") == "BTCUSDT"
         assert client._to_plain("BTCUSDT") == "BTCUSDT"
         assert client._to_plain("cmt_btcusdt") == "BTCUSDT"
+        # Test stripping exchange suffixes (verifies clean_symbol integration)
+        assert client._to_plain("BTCUSDT_UMCBL") == "BTCUSDT"
+        assert client._to_plain("ETHUSDT-PERP") == "ETHUSDT"
+        assert client._to_plain("SOLUSDT_PERP") == "SOLUSDT"
     
     def test_encode_symbol(self):
         """Test _encode_symbol encodes to specified format"""

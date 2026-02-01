@@ -673,8 +673,14 @@ class WEEXv2Client:
             cached_fmt = self._get_cached_symbol_format(path_base, internal_symbol)
             if cached_fmt:
                 current_format = cached_fmt
+                if _symbol_fallback_attempt == 0:
+                    logger.debug(f"Using cached symbol format for {path_base} + {internal_symbol}: {cached_fmt}")
+            elif _symbol_fallback_attempt < len(symbol_formats):
+                current_format = symbol_formats[_symbol_fallback_attempt]
             else:
-                current_format = symbol_formats[_symbol_fallback_attempt] if _symbol_fallback_attempt < len(symbol_formats) else "contract"
+                # This should not happen in normal operation - log a warning
+                logger.warning(f"⚠️ Invalid symbol fallback attempt {_symbol_fallback_attempt}, defaulting to contract")
+                current_format = "contract"
         else:
             current_format = None
         
