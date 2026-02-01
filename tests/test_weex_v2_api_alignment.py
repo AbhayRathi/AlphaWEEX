@@ -69,9 +69,13 @@ class TestSetLeverage:
     """Test set_leverage method with API alignment fixes"""
     
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_set_leverage_uses_clean_symbol(self, mock_send_request):
-        """Test that set_leverage uses clean_symbol for API call"""
+    @patch.object(WEEXv2Client, 'resolve_contract_symbol')
+    def test_set_leverage_uses_clean_symbol(self, mock_resolve, mock_send_request):
+        """Test that set_leverage uses resolved symbol for API call"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock symbol resolution
+        mock_resolve.return_value = "BTCUSDT_UMCBL"
         
         # Mock successful response
         mock_response = Mock()
@@ -86,17 +90,21 @@ class TestSetLeverage:
         assert mock_send_request.called
         call_args = mock_send_request.call_args
         
-        # Check the body contains cleaned symbol (BTCUSDT, not cmt_btcusdt)
+        # Check the body contains resolved symbol (BTCUSDT_UMCBL)
         body = call_args[1]['body']
-        assert body['symbol'] == "BTCUSDT"
+        assert body['symbol'] == "BTCUSDT_UMCBL"
         assert body['leverage'] == "20"  # WEEX V2 API requires string format
         assert body['marginMode'] == "isolated"  # WEEX V2 API requires string format
         assert result is True
     
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_set_leverage_endpoint_path(self, mock_send_request):
+    @patch.object(WEEXv2Client, 'resolve_contract_symbol')
+    def test_set_leverage_endpoint_path(self, mock_resolve, mock_send_request):
         """Test that set_leverage uses correct endpoint path"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock symbol resolution
+        mock_resolve.return_value = "BTCUSDT_UMCBL"
         
         # Mock successful response
         mock_response = Mock()
@@ -221,11 +229,15 @@ class TestPlaceMarketOrder:
     
     @patch.object(WEEXv2Client, 'check_spread')
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_place_market_order_uses_clean_symbol(self, mock_send_request, mock_check_spread):
-        """Test that place_market_order uses clean_symbol for API call"""
+    @patch.object(WEEXv2Client, 'resolve_contract_symbol')
+    def test_place_market_order_uses_clean_symbol(self, mock_resolve, mock_send_request, mock_check_spread):
+        """Test that place_market_order uses resolved symbol for API call"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         # Clear any active symbols from previous tests
         client.active_symbols.clear()
+        
+        # Mock symbol resolution
+        mock_resolve.return_value = "BTCUSDT_UMCBL"
         
         # Mock spread check
         mock_check_spread.return_value = True
@@ -239,20 +251,24 @@ class TestPlaceMarketOrder:
         # Call with cmt_ prefix
         result = client.place_market_order("cmt_btcusdt", "BUY", 0.1)
         
-        # Verify body contains cleaned symbol
+        # Verify body contains resolved symbol
         call_args = mock_send_request.call_args
         body = call_args[1]['body']
-        assert body['symbol'] == "BTCUSDT"
+        assert body['symbol'] == "BTCUSDT_UMCBL"
         assert "cmt_" not in body['symbol']
         assert result is not None
     
     @patch.object(WEEXv2Client, 'check_spread')
     @patch.object(WEEXv2Client, 'send_weex_request')
-    def test_place_market_order_payload_format(self, mock_send_request, mock_check_spread):
+    @patch.object(WEEXv2Client, 'resolve_contract_symbol')
+    def test_place_market_order_payload_format(self, mock_resolve, mock_send_request, mock_check_spread):
         """Test that place_market_order has correct payload format to avoid 40020 error"""
         client = WEEXv2Client("test_key", "test_secret", "test_pass")
         # Clear any active symbols from previous tests
         client.active_symbols.clear()
+        
+        # Mock symbol resolution
+        mock_resolve.return_value = "BTCUSDT_UMCBL"
         
         # Mock spread check
         mock_check_spread.return_value = True

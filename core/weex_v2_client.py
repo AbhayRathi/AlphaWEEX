@@ -143,6 +143,11 @@ class WEEXv2Client:
             "ltcusdt": 0.01,
         }
         
+        # Contract discovery: Cache for symbol resolution
+        self._contract_map: Dict[str, str] = {}
+        self._contract_map_timestamp: float = 0
+        self._contract_map_ttl: int = 3600  # Cache for 60 minutes
+        
         # AI Wars Audit: Load persisted state if exists
         self._load_state_from_file()
     
@@ -186,6 +191,178 @@ class WEEXv2Client:
         cleaned = symbol.lower().replace('cmt_', '').upper()
         return cleaned
     
+    def _extract_internal_key(self, contract: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract internal symbol key from contract data with tolerant field parsing
+        
+        Args:
+            contract: Contract data dict from API response
+            
+        Returns:
+            Internal symbol key (e.g., BTCUSDT) or None if extraction fails
+            
+        Extraction strategy:
+        1. If baseCoin and quoteCoin exist, use them (e.g., BTC + USDT = BTCUSDT)
+        2. Otherwise, extract from exchange symbol by removing suffixes:
+           - BTCUSDT_UMCBL -> BTCUSDT
+           - BTCUSDT-PERP -> BTCUSDT
+        
+        Tolerates field variations:
+        - Base: baseCoin, base, baseCurrency
+        - Quote: quoteCoin, quote, quoteCurrency
+        - Symbol: symbol, contractSymbol, symbolName, productId
+        """
+        # Try to extract base and quote coins (most reliable)
+        # Tolerate field variations
+        base = contract.get('baseCoin') or contract.get('base') or contract.get('baseCurrency') or ''
+        quote = contract.get('quoteCoin') or contract.get('quote') or contract.get('quoteCurrency') or ''
+        
+        if base and quote:
+            # Normalize to uppercase and concatenate
+            return f"{base.upper()}{quote.upper()}"
+        
+        # Fallback: extract from exchange symbol
+        # Tolerate multiple field names for the exchange symbol
+        exchange_symbol = (contract.get('symbol') or 
+                          contract.get('contractSymbol') or 
+                          contract.get('symbolName') or
+                          contract.get('productId') or '')
+        
+        if not exchange_symbol:
+            return None
+        
+        # Remove common suffixes to get internal key
+        # Order matters: try specific suffixes first
+        for suffix in ['_UMCBL', '-PERP', '_PERP']:
+            if suffix in exchange_symbol:
+                return exchange_symbol.replace(suffix, '').upper()
+        
+        # If no suffix found, check if it contains USDT (common base pattern)
+        # e.g., "BTCUSDT" -> "BTCUSDT"
+        if 'USDT' in exchange_symbol.upper():
+            return exchange_symbol.split('_')[0].split('-')[0].upper()
+        
+        return None
+    
+    def load_contracts(self) -> Dict[str, str]:
+        """
+        Load contract discovery data from WEEX V2 API with tolerant parsing
+        
+        Tries endpoints in order:
+        1. /capi/v2/market/contracts?productType=umcbl
+        2. /capi/v2/public/contracts?productType=umcbl
+        
+        Builds mapping: internal symbol (BTCUSDT) -> exchange symbol (BTCUSDT_UMCBL)
+        Caches result for 60 minutes.
+        
+        Supports WEEX_CONTRACT_MAP_OVERRIDE env var for CI/testing:
+        Set to JSON string like: {"BTCUSDT":"BTCUSDT_UMCBL","ETHUSDT":"ETHUSDT_UMCBL"}
+        
+        Returns:
+            Dict mapping internal symbols to exchange symbols
+        """
+        # Check for CI override first
+        override = os.getenv("WEEX_CONTRACT_MAP_OVERRIDE")
+        if override:
+            try:
+                override_map = json.loads(override)
+                self._contract_map = override_map
+                self._contract_map_timestamp = time.time()
+                logger.info(f"✅ Using contract map override ({len(override_map)} symbols)")
+                return override_map
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ Failed to parse WEEX_CONTRACT_MAP_OVERRIDE: {e}")
+        
+        # Check if cache is still fresh
+        now = time.time()
+        if self._contract_map and (now - self._contract_map_timestamp) < self._contract_map_ttl:
+            logger.debug(f"Using cached contract map ({len(self._contract_map)} symbols)")
+            return self._contract_map
+        
+        logger.info("🔍 Loading contract discovery from WEEX V2 API...")
+        
+        endpoints = [
+            "/capi/v2/market/contracts?productType=umcbl",
+            "/capi/v2/public/contracts?productType=umcbl"
+        ]
+        
+        for endpoint in endpoints:
+            try:
+                response = self.send_weex_request("GET", endpoint.split('?')[0], f"?{endpoint.split('?')[1]}")
+                
+                if response and response.status_code == 200:
+                    data = response.json()
+                    
+                    # Parse response - handle both direct list and nested data
+                    contracts = []
+                    if isinstance(data, list):
+                        contracts = data
+                    elif isinstance(data, dict):
+                        contracts = data.get('data', [])
+                    
+                    if not contracts:
+                        logger.warning(f"⚠️ No contracts returned from {endpoint}")
+                        continue
+                    
+                    # Build mapping with tolerant field parsing
+                    contract_map = {}
+                    for contract in contracts:
+                        internal_key = self._extract_internal_key(contract)
+                        if internal_key:
+                            # Extract exchange symbol with field name tolerance
+                            exchange_symbol = (contract.get('symbol') or 
+                                              contract.get('contractSymbol') or 
+                                              contract.get('symbolName') or
+                                              contract.get('productId'))
+                            if exchange_symbol:
+                                contract_map[internal_key] = exchange_symbol
+                            else:
+                                # If no exchange symbol found, use fallback
+                                contract_map[internal_key] = f"{internal_key}_UMCBL"
+                    
+                    if contract_map:
+                        self._contract_map = contract_map
+                        self._contract_map_timestamp = now
+                        logger.info(f"✅ Loaded {len(contract_map)} contract mappings from {endpoint}")
+                        return contract_map
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load contracts from {endpoint}: {str(e)}")
+                continue
+        
+        # If all endpoints failed, log warning but don't fail
+        logger.warning("⚠️ Contract discovery failed on all endpoints; will use fallback resolution")
+        return {}
+    
+    def resolve_contract_symbol(self, symbol: str) -> str:
+        """
+        Resolve internal symbol (BTCUSDT) to exchange contract symbol (BTCUSDT_UMCBL)
+        
+        Args:
+            symbol: Internal symbol (e.g., BTCUSDT, cmt_btcusdt)
+        
+        Returns:
+            Exchange contract symbol (e.g., BTCUSDT_UMCBL)
+        """
+        # Clean the symbol first
+        clean_sym = self.clean_symbol(symbol)
+        
+        # Ensure contract map is loaded
+        if not self._contract_map or (time.time() - self._contract_map_timestamp) >= self._contract_map_ttl:
+            self.load_contracts()
+        
+        # Try to find in map
+        if clean_sym in self._contract_map:
+            exchange_sym = self._contract_map[clean_sym]
+            logger.info(f"Resolved symbol: {clean_sym} → {exchange_sym}")
+            return exchange_sym
+        
+        # Fallback: use _UMCBL suffix (most common for WEEX V2 perpetual contracts)
+        # Note: WEEX V2 uses BTCUSDT_UMCBL format for USDT-margined perpetual contracts
+        exchange_sym = f"{clean_sym}_UMCBL"
+        logger.warning(f"⚠️ Symbol not in contract map, using fallback: {clean_sym} → {exchange_sym}")
+        return exchange_sym
+    
     def round_qty(self, symbol: str, qty: float) -> float:
         """
         Round quantity to the correct precision for the symbol
@@ -218,24 +395,29 @@ class WEEXv2Client:
         precision = self.precision_map.get(symbol.lower(), 2)
         return round(rounded, precision)
     
-    def _cooldown_key(self, path: str, payload: Optional[dict]) -> str:
+    def _cooldown_key(self, path: str, query_params: str = "", payload: Optional[dict] = None) -> str:
         """
-        Cloudflare 521 Hardening: Generate cooldown key from path and symbol.
+        Cloudflare 521 Hardening: Generate cooldown key from path, query params, and symbol.
         
         Args:
             path: API endpoint path
+            query_params: Query parameters string
             payload: Request payload (dict or None)
             
         Returns:
-            str: Cooldown key in format "path" or "path:SYMBOL"
+            str: Cooldown key in format "path?query" or "path?query:SYMBOL"
         """
-        key = path
+        # Include query params in the key for more specific scoping
+        key = f"{path}{query_params}" if query_params else path
+        
         try:
+            # Add symbol from payload if present for even finer scoping
             if isinstance(payload, dict) and payload.get("symbol"):
-                key = f"{path}:{str(payload['symbol']).upper()}"
+                key = f"{key}:{str(payload['symbol']).upper()}"
         except (KeyError, AttributeError, TypeError) as e:
-            # Log but don't fail - just use path without symbol
+            # Log but don't fail - just use path+query without symbol
             logger.debug(f"Could not extract symbol from payload for cooldown key: {e}")
+        
         return key
     
     def _cooldown_remaining(self, key: str) -> float:
@@ -310,7 +492,7 @@ class WEEXv2Client:
         """
         # Prepare payload for cooldown key generation
         payload = body if isinstance(body, dict) else None
-        key = self._cooldown_key(path, payload)
+        key = self._cooldown_key(path, query_params, payload)
         
         for attempt in range(max_retries):
             # Check per-route cooldown
@@ -425,12 +607,12 @@ class WEEXv2Client:
         Endpoint: GET /capi/v2/market/candles
         """
         try:
-            # Clean symbol for API call but preserve granularity param
-            clean_symbol_value = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             path = "/capi/v2/market/candles"
             
-            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}&granularity={interval}&limit={limit}"
+            query_params = f"?symbol={urllib.parse.quote(exchange_symbol)}&granularity={interval}&limit={limit}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -485,11 +667,11 @@ class WEEXv2Client:
         - Otherwise = 'Neutral'
         """
         try:
-            # Clean symbol for API call
-            clean_symbol_value = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             path = "/capi/v2/market/funding-rate"
-            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}"
+            query_params = f"?symbol={urllib.parse.quote(exchange_symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -529,12 +711,12 @@ class WEEXv2Client:
         Get current market price from WEEX ticker endpoint
         """
         try:
-            # Clean symbol for API call
-            clean_symbol_value = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             # We use the ticker endpoint for the latest price
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={clean_symbol_value}"
+            query_params = f"?symbol={exchange_symbol}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -563,11 +745,11 @@ class WEEXv2Client:
         Get order book (market depth) from WEEX
         """
         try:
-            # Clean symbol: remove 'cmt_' prefix and convert to UPPERCASE
-            symbol_clean = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             path = "/capi/v2/market/depth"
-            query_params = f"?symbol={urllib.parse.quote(symbol_clean)}&depth={depth}"
+            query_params = f"?symbol={urllib.parse.quote(exchange_symbol)}&depth={depth}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -590,11 +772,11 @@ class WEEXv2Client:
         Get ticker (24h stats) from WEEX
         """
         try:
-            # Clean symbol for API call
-            clean_symbol_value = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             path = "/capi/v2/market/ticker"
-            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}"
+            query_params = f"?symbol={urllib.parse.quote(exchange_symbol)}"
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -918,15 +1100,15 @@ class WEEXv2Client:
             Returns:
                 bool: True if leverage was set successfully, False otherwise
             """
-            # Clean symbol for API call: remove 'cmt_' prefix and convert to UPPERCASE
-            clean_symbol = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             # Primary endpoint: /capi/v2/account/setLeverage (POST)
             path = "/capi/v2/account/setLeverage"
             
             # WEEX V2 API requires string format for all parameters
             body = {
-                "symbol": clean_symbol,
+                "symbol": exchange_symbol,
                 "leverage": str(leverage),
                 "marginMode": "isolated"  # Always use isolated mode as required by WEEX V2 API
             }
@@ -956,13 +1138,13 @@ class WEEXv2Client:
                 return False
     
     def has_open_position(self, symbol: str) -> bool:
-        # 1. Clean symbol using the clean_symbol method for consistency
-        clean_symbol_value = self.clean_symbol(symbol)
+        # Resolve symbol to exchange contract symbol
+        exchange_symbol = self.resolve_contract_symbol(symbol)
         
         try:
             path = "/capi/v2/account/position/allPosition"
             # Include symbol in query params for filtered results
-            query_params = f"?symbol={urllib.parse.quote(clean_symbol_value)}" if clean_symbol_value else "" 
+            query_params = f"?symbol={urllib.parse.quote(exchange_symbol)}" if exchange_symbol else "" 
             
             response = self.send_weex_request("GET", path, query_params)
             
@@ -983,15 +1165,15 @@ class WEEXv2Client:
                         pos_symbol = str(pos.get('symbol', '')).upper()
                         size = float(pos.get('size', 0))
                         
-                        if pos_symbol == clean_symbol_value and size > 0:
-                            logger.info(f"📊 Open position found for {clean_symbol_value}: {size} units")
-                            self.open_positions[clean_symbol_value] = pos
+                        if pos_symbol == exchange_symbol and size > 0:
+                            logger.info(f"📊 Open position found for {exchange_symbol}: {size} units")
+                            self.open_positions[exchange_symbol] = pos
                             return True
                     except (ValueError, TypeError):
                         continue
                 
-                if clean_symbol_value in self.open_positions:
-                    del self.open_positions[clean_symbol_value]
+                if exchange_symbol in self.open_positions:
+                    del self.open_positions[exchange_symbol]
                 return False
             else:
                 logger.error(f"❌ Position Check Failed (HTTP {response.status_code}): {response.text}")
@@ -1032,8 +1214,8 @@ class WEEXv2Client:
             size = self.round_step_size(symbol_internal, size)
             client_oid = str(uuid.uuid4()).replace("-", "")[:30]
             
-            # Clean symbol for API call: BTCUSDT format (no cmt_ prefix, uppercase)
-            clean_symbol_value = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             
             side_map = {
                 "BUY": "1", "SELL": "2",
@@ -1042,7 +1224,7 @@ class WEEXv2Client:
             
             path = "/capi/v2/order/placeOrder"
             body_dict = {
-                "symbol": clean_symbol_value,
+                "symbol": exchange_symbol,
                 "client_oid": client_oid,
                 "side": side_map.get(side.upper(), "1"),
                 "type": "1",         # Market Order
@@ -1319,11 +1501,12 @@ class WEEXv2Client:
             True if successful, False otherwise
         """
         try:
-            clean_symbol = self.clean_symbol(symbol)
+            # Resolve symbol to exchange contract symbol
+            exchange_symbol = self.resolve_contract_symbol(symbol)
             path = "/capi/v2/order/cancelAllOrders"
             
             body_dict = {
-                "symbol": clean_symbol.lower()
+                "symbol": exchange_symbol.lower()
             }
             
             body_json = json.dumps(body_dict, separators=(',', ':'))
