@@ -233,8 +233,9 @@ class WEEXv2Client:
         try:
             if isinstance(payload, dict) and payload.get("symbol"):
                 key = f"{path}:{str(payload['symbol']).upper()}"
-        except Exception:
-            pass
+        except (KeyError, AttributeError, TypeError) as e:
+            # Log but don't fail - just use path without symbol
+            logger.debug(f"Could not extract symbol from payload for cooldown key: {e}")
         return key
     
     def _cooldown_remaining(self, key: str) -> float:
