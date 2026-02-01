@@ -742,6 +742,22 @@ class TestLiquidCapitalTolerantShapes:
             
             # No positions = no reserved margin
             assert result == 50.0
+    
+    def test_liquid_capital_handles_zero_margin(self):
+        """Test liquid capital correctly handles zero margin values"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        with patch.object(WEEXv2Client, 'get_pending_orders_cached') as mock_cached:
+            # Position with explicit zero margin (valid value, not None)
+            mock_cached.return_value = [
+                {"initialMargin": 0},  # Zero value should be used, not fall through
+                {"initialMargin": "10.0"}
+            ]
+            
+            result = client._calculate_liquid_capital(100.0)
+            
+            # Should be 100.0 - 0 - 10.0 = 90.0
+            assert result == 90.0
 
 
 class TestJitterEnvConfiguration:
