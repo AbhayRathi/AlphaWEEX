@@ -1,0 +1,107 @@
+    def get_account_balance(self, retry_count: int = 0, max_retries: int = 3) -> Optional[Dict[str, Any]]:
+        """
+        Get account balance with 521 error handling.
+        
+        Args:
+            retry_count: Current retry attempt (internal use)
+            max_retries: Maximum number of retries for 521 errors
+            
+        Returns:
+            Account balance data or None
+        """
+        try:
+            path = "/capi/v2/account/getAccounts"
+            response = self.send_weex_request("GET", path)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Handle both formats: dict with 'data' or 'collateral' key, or direct list
+                # Log which format is received for monitoring
+                if isinstance(data, list):
+                    logger.debug("Account balance response is a list (direct format)")
+                    collateral_list = data
+                else:
+                    logger.debug("Account balance response is a dict (nested format)")
+                    # V2 API may use 'data' key for the list
+                    collateral_list = data.get('data', data.get('collateral', []))
+                
+                if collateral_list:
+                    for item in collateral_list:
+                        # Ensure we are looking at the USDT wallet
+                        # Check both coin_id (value "2") and coinName (value "USDT")
+                        is_usdt = (str(item.get('coin_id')) == "2" or 
+                                   str(item.get('coinName', '')).upper() == "USDT")
+                        if is_usdt:
+                            # Comprehensive equity key checking: try totalEquity, equity, accountEquity, available
+                            equity = 0.0  # Default to 0.0 if no valid value found
+                            found_value = False  # Track if we found any valid value
+                            for key in ['totalEquity', 'equity', 'accountEquity', 'available']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        value = float(item[key])
+                                        if value != 0.0:  # Found a non-zero value, use it
+                                            equity = value
+                                            found_value = True
+                                            break
+                                        elif not found_value:  # First valid value is 0.0, store it but keep looking
+                                            equity = value
+                                            found_value = True
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # Handle zero balance - retry instead of using fallback
+                            if equity == 0.0 and retry_count < max_retries:
+                                logger.warning(f"🛑 Zero balance detected. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                                time.sleep(60)
+                                return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                            
+                            # If still 0 after retries, stop trading
+                            if equity == 0.0:
+                                logger.error("❌ Balance is still 0.0 after retries. Bot cannot trade without balance.")
+                                # Return None to indicate failure - don't use hardcoded fallback
+                                return None
+                            
+                            # Safety check: if balance < 0, use last known positive balance
+                            if equity < 0:
+                                logger.warning(f"⚠️ Negative balance detected ({equity}), using last known positive balance: {self.last_known_positive_balance}")
+                                equity = self.last_known_positive_balance
+                                # Don't update last_known_positive_balance since this is a fallback
+                            elif equity > 0:
+                                # Update last known positive balance and mark we've had a successful check
+                                self.last_known_positive_balance = equity
+                                self.is_first_balance_check = False
+                            
+                            # Add equity to the item for backwards compatibility
+                            item['equity'] = equity
+                            item['totalEquity'] = equity
+                            
+                            # AI Wars: Extract available balance for precise logging
+                            available = 0.0
+                            for key in ['availableBalance', 'available', 'availableFunds']:
+                                if key in item and item[key] is not None:
+                                    try:
+                                        available = float(item[key])
+                                        if available != 0.0:
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # AI Wars: Log both Equity and Available
+                            logger.info(f"[LOG] Equity: ${equity:.2f} | Available: ${available:.2f}")
+                            
+                            # AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
+                            item['availableBalance'] = available
+                            item['liquidCapital'] = self._calculate_liquid_capital(available)
+                            
+                            return item
+                    
+                # If no list found, retry or fail
+                if retry_count < max_retries:
+                    logger.warning(f"🛑 No collateral data found. Waiting 60s for a clear window... (Retry {retry_count + 1}/{max_retries})")
+                    time.sleep(60)
+                    return self.get_account_balance(retry_count=retry_count + 1, max_retries=max_retries)
+                
+                logger.error(f"❌ No balance data found after {retry_count} retries (max: {max_retries})")
+                return None
+                
+            # Handle 521/403 errors - should be handled by send_weex_request, but add extra safety
