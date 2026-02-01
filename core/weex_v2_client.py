@@ -1601,6 +1601,10 @@ class WEEXv2Client:
                 body_dict["takeProfitTriggerPrice"] = str(float(take_profit_price))
                 body_dict["takeProfitReduceOnly"] = "true"  # Prevent accidental new position opening
             
+            # Log placing order attempt for traceability
+            logger.info(f"📤 Placing order: symbol={exchange_symbol}, side={side}, size={size}, "
+                       f"SL={stop_loss_price}, TP={take_profit_price}")
+            
             # Pass the dict body to send_weex_request, which will handle minification
             # Note: send_weex_request already handles delays and firewall errors (403/521)
             response = self.send_weex_request("POST", path, body=body_dict)
@@ -1631,7 +1635,8 @@ class WEEXv2Client:
                               data.get('success') is True)
                 if data.get('order_id') or data.get('data', {}).get('orderId') or is_success:
                     order_id = data.get('order_id') or data.get('orderId') or data.get('data', {}).get('orderId')
-                    logger.info(f"✅ Success! ID: {order_id}")
+                    # Log order placed with order_id for traceability
+                    logger.info(f"📥 Order placed: symbol={exchange_symbol}, side={side}, order_id={order_id}")
                     
                     # AI Wars: Track active order and symbol (use internal symbol format)
                     if side in ["BUY", "SELL"]:
@@ -1643,6 +1648,9 @@ class WEEXv2Client:
                         self._save_state_to_file()
                     
                     return data
+                else:
+                    # Log order failed with response body for debugging
+                    logger.warning(f"📥 Order failed: symbol={exchange_symbol}, side={side}, response={data}")
             return None
 
         except Exception as e:

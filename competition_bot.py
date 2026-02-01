@@ -86,7 +86,12 @@ MAIN_LOOP_INTERVAL = 15  # Check every 10 seconds (Alpha-Apex aggressive mode)
 MIN_CONFIDENCE = 0.65  # Aggressive: Set to 0.65 as requested (was 0.64, user wanted 0.65)
 MIN_CONFIDENCE_HEDGE = 0.70  # Aggressive: Reduced from 0.85 to 0.70 as requested
 RSI_PERIOD = 9  # Alpha-Apex: 9-period RSI for faster signals
-VOLATILITY_BYPASS_THRESHOLD = 0.33  # Alpha-Apex: If 5-min price change > 0.5%, allow trade at lower confidence
+
+# Volatility Bypass Configuration (env-driven for competition window toggles)
+# VOLATILITY_BYPASS_PCT: Threshold in % for 5-min price change to trigger bypass (default: 0.33)
+# Set WEEX_DISABLE_VOLATILITY_BYPASS=true to completely disable volatility checks
+VOLATILITY_BYPASS_DISABLED = os.getenv("WEEX_DISABLE_VOLATILITY_BYPASS", "false").lower() == "true"
+VOLATILITY_BYPASS_THRESHOLD = float(os.getenv("VOLATILITY_BYPASS_PCT", "0.33"))  # Alpha-Apex: If 5-min price change > threshold, allow trade at lower confidence
 VOLATILITY_BYPASS_CONFIDENCE = 0.51  # Alpha-Apex: Lower confidence threshold during high volatility
 MIN_ORDER_VALUE_USDT = 5.0  # Alpha-Apex: Minimum order value to avoid exchange rejection
 AUTO_FLIP_COOLDOWN_SECONDS = 30  # Alpha-Apex: Cooldown between auto-flips to prevent whipsaw
@@ -1661,9 +1666,15 @@ class CompetitionTradingBot:
             signal = self.generate_signal(klines, symbol)
             
             # Alpha-Apex: Volatility bypass check
-            # If 5-minute price change > 0.5%, allow trade at confidence > 0.65
+            # If 5-minute price change > threshold%, allow trade at confidence > 0.65
+            # Env-driven: WEEX_DISABLE_VOLATILITY_BYPASS=true disables volatility filter entirely
+            #             VOLATILITY_BYPASS_PCT=1.0 (or any high value) effectively bypasses
             volatility_bypass = False
-            if len(klines) >= 5:
+            if VOLATILITY_BYPASS_DISABLED:
+                # Volatility filter completely disabled via env
+                volatility_bypass = True
+                logger.info(f"⚡ Volatility filter disabled for {symbol} (WEEX_DISABLE_VOLATILITY_BYPASS=true)")
+            elif len(klines) >= 5:
                 price_5min_ago = float(klines[-5][4])
                 price_change_5min_pct = abs((current_price - price_5min_ago) / price_5min_ago) * 100
                 if price_change_5min_pct > VOLATILITY_BYPASS_THRESHOLD:
@@ -1699,28 +1710,35 @@ class CompetitionTradingBot:
             
             # 6. Execute trade if confidence is high enough
             # Alpha-Apex: Support both BUY (Long) and SELL (Short) with confidence >= threshold
+            
+            # Skip reason: Confidence too low
+            if signal["action"] in ["BUY", "SELL"] and signal["confidence"] < confidence_threshold:
+                logger.info(f"⏭️ Skipped by confidence filter: {symbol} {signal['action']} "
+                           f"(confidence={signal['confidence']:.2%}, threshold={confidence_threshold:.2%})")
+                return
+            
             if signal["action"] == "BUY" and signal["confidence"] >= confidence_threshold:
                 # Enhancement 9: Enhanced logging - Check if position already exists
                 if self.client.has_open_position(symbol):
-                    logger.info(f"🚫 Skipping {symbol}: Position already exists")
+                    logger.info(f"⏭️ Skipped by position check: {symbol} BUY - position already exists")
                     return
                 
                 # Critical Fix 2: Check global exposure limit BEFORE placing order
                 current_exposure = self.calculate_total_exposure()
                 new_position_pct = EQUITY_SIZING_PCT  # 10%
                 if current_exposure + new_position_pct > GLOBAL_MAX_EXPOSURE_PCT:
-                    logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
+                    logger.info(f"⏭️ Skipped by exposure limit: {symbol} BUY - max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
                     return
                 
                 # Effective Available Gating: Use helper method for consistent logic
                 effective_available = self.get_effective_available()
                 if effective_available <= 0.0:
-                    logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
+                    logger.info(f"⏭️ Skipped by available funds: {symbol} BUY - no effective available funds (pending-orders cooling or empty balance)")
                     return
                 
                 # Enhancement 6: Check volume spike filter
                 if not self.is_volume_spike(klines, symbol):
-                    logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
+                    logger.info(f"⏭️ Skipped by volume filter: {symbol} BUY - low volume (potential liquidity trap)")
                     return
                 
                 # AI Wars: Calculate TP/SL prices for exchange-side safety
@@ -1868,18 +1886,18 @@ class CompetitionTradingBot:
                     current_exposure = self.calculate_total_exposure()
                     new_position_pct = EQUITY_SIZING_PCT
                     if current_exposure + new_position_pct > GLOBAL_MAX_EXPOSURE_PCT:
-                        logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
+                        logger.info(f"⏭️ Skipped by exposure limit: {symbol} SELL - max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
                         return
                     
                     # Effective Available Gating: Use helper method for consistent logic
                     effective_available = self.get_effective_available()
                     if effective_available <= 0.0:
-                        logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
+                        logger.info(f"⏭️ Skipped by available funds: {symbol} SELL - no effective available funds (pending-orders cooling or empty balance)")
                         return
                     
                     # Check volume spike filter
                     if not self.is_volume_spike(klines, symbol):
-                        logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
+                        logger.info(f"⏭️ Skipped by volume filter: {symbol} SELL - low volume (potential liquidity trap)")
                         return
                     
                     # AI Wars: Calculate TP/SL prices for SHORT (inverse of LONG)
