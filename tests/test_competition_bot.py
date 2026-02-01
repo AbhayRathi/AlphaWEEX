@@ -1375,7 +1375,7 @@ class TestVolatilityGuardBehavior:
                                         bot.process_symbol("BTCUSDT")
                                     
                                     # Check that the volatility guard log appears
-                                    assert any("Skipping trade by volatility bypass" in record.message for record in caplog.records), \
+                                    assert any("Skipping trade due to volatility guard" in record.message for record in caplog.records), \
                                         f"Should log volatility skip reason. Captured logs: {[r.message for r in caplog.records]}"
     
     def test_volatility_guard_allows_when_disabled(self, mock_env, monkeypatch, caplog):
@@ -1423,12 +1423,12 @@ class TestVolatilityGuardBehavior:
                                         bot.process_symbol("BTCUSDT")
                                     
                                     # Should log that filter is disabled
-                                    assert any("Volatility filter disabled" in record.message for record in caplog.records), \
-                                        f"Should log that volatility filter is disabled. Captured logs: {[r.message for r in caplog.records]}"
+                                    assert any("Volatility guard disabled" in record.message for record in caplog.records), \
+                                        f"Should log that volatility guard is disabled. Captured logs: {[r.message for r in caplog.records]}"
                                     
                                     # Should NOT log volatility skip reason
-                                    assert not any("Skipping trade by volatility bypass" in record.message for record in caplog.records), \
-                                        "Should NOT log volatility skip when bypass is disabled"
+                                    assert not any("Skipping trade due to volatility guard" in record.message for record in caplog.records), \
+                                        "Should NOT log volatility skip when guard is disabled"
         
         # Cleanup
         monkeypatch.delenv('WEEX_DISABLE_VOLATILITY_BYPASS', raising=False)

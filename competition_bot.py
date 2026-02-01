@@ -1674,10 +1674,10 @@ class CompetitionTradingBot:
                 price_5min_ago = float(klines[-5][4])
                 price_change_5min_pct = abs((current_price - price_5min_ago) / price_5min_ago) * 100
                 if price_change_5min_pct > VOLATILITY_BYPASS_THRESHOLD:
-                    logger.info(f"⛔ Skipping trade by volatility bypass: {symbol} 5m change {price_change_5min_pct:.2f}% > {VOLATILITY_BYPASS_THRESHOLD:.2f}%")
+                    logger.info(f"⛔ Skipping trade due to volatility guard: {symbol} 5m change {price_change_5min_pct:.2f}% > threshold {VOLATILITY_BYPASS_THRESHOLD:.2f}%")
                     return
             elif VOLATILITY_BYPASS_DISABLED:
-                logger.info(f"🛡️ Volatility filter disabled for {symbol} (WEEX_DISABLE_VOLATILITY_BYPASS=true)")
+                logger.info(f"🛡️ Volatility guard disabled for {symbol} (WEEX_DISABLE_VOLATILITY_BYPASS=true)")
             
             # 5. Log decision with AI reasoning (for every scan, including HOLD)
             # a) First, log with the new log_decision method for easy console scannability (📝 emoji)
