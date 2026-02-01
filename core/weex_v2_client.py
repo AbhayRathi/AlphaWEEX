@@ -1174,21 +1174,35 @@ class WEEXv2Client:
                             item['totalEquity'] = equity
                             
                             # AI Wars: Extract available balance for precise logging
+                            # Try explicit available-like fields first
                             available = 0.0
                             for key in ['availableBalance', 'available', 'availableFunds']:
-                                if key in item and item[key] is not None:
+                                v = item.get(key)
+                                if v is not None:
                                     try:
-                                        available = float(item[key])
+                                        available = float(v)
                                         if available != 0.0:
                                             break
-                                    except (ValueError, TypeError):
-                                        continue
+                                    except (TypeError, ValueError):
+                                        pass
                             
-                            # AI Wars: Log both Equity and Available
+                            # Fallback to 'amount' (or 'legacy_amount') when explicit available is missing or zero
+                            try:
+                                if available == 0.0:
+                                    available = float(item.get('amount') or item.get('legacy_amount') or 0.0)
+                            except (TypeError, ValueError):
+                                available = 0.0
+                            
+                            # Optional conservative haircut (default 1.0 = no haircut)
+                            haircut = float(os.getenv("WEEX_AVAILABLE_FALLBACK_HAIRCUT", "1.0"))
+                            available = max(0.0, available * haircut)
+                            
+                            # AI Wars: Log both Equity and Available (with corrected fallback value)
                             logger.info(f"[LOG] Equity: ${equity:.2f} | Available: ${available:.2f}")
                             
                             # AI Wars Audit: Calculate truly liquid capital by subtracting initial margin
                             item['availableBalance'] = available
+                            item['available'] = available  # Add explicit 'available' key for consumers
                             item['liquidCapital'] = self._calculate_liquid_capital(available)
                             
                             return item

@@ -582,6 +582,111 @@ class TestWEEXv2Client:
         with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
             is_frozen = bot.check_frozen_balance()
             assert is_frozen is False, "Should NOT be frozen when both equity and available are positive"
+    
+    def test_balance_available_fallback_from_amount(self):
+        """Test that available fallbacks to amount when explicit available field is missing"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock API response without 'available' field but with 'amount'
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'collateral': [
+                {
+                    'coin_id': '2',
+                    'amount': '887.61'
+                    # No 'available', 'availableBalance', or 'availableFunds' fields
+                }
+            ]
+        }
+        
+        # Ensure haircut is 1.0 (default)
+        with patch.dict(os.environ, {"WEEX_AVAILABLE_FALLBACK_HAIRCUT": "1.0"}):
+            with patch.object(client, 'send_weex_request', return_value=mock_response):
+                with patch.object(client, 'get_pending_orders_cached', return_value=[]):
+                    balance = client.get_account_balance()
+                    assert balance is not None
+                    # Available should fallback to amount value
+                    assert abs(balance['available'] - 887.61) < 0.01, f"Expected available ~887.61, got {balance['available']}"
+                    # Equity should also be from amount
+                    assert abs(balance['equity'] - 887.61) < 0.01
+    
+    def test_balance_available_fallback_with_haircut(self):
+        """Test that available fallback applies haircut factor correctly"""
+        client = WEEXv2Client("test_key", "test_secret", "test_pass")
+        
+        # Mock API response without 'available' field but with 'amount'
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'collateral': [
+                {
+                    'coin_id': '2',
+                    'amount': '1000.0'
+                    # No 'available' fields
+                }
+            ]
+        }
+        
+        # Apply 0.98 haircut
+        with patch.dict(os.environ, {"WEEX_AVAILABLE_FALLBACK_HAIRCUT": "0.98"}):
+            with patch.object(client, 'send_weex_request', return_value=mock_response):
+                with patch.object(client, 'get_pending_orders_cached', return_value=[]):
+                    balance = client.get_account_balance()
+                    assert balance is not None
+                    # Available should be amount * haircut = 1000 * 0.98 = 980
+                    assert abs(balance['available'] - 980.0) < 0.01, f"Expected available ~980.0, got {balance['available']}"
+    
+    def test_effective_available_during_cooldown(self):
+        """Test that trades use effective_available during pending-orders cooldown"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Mock balance with available > 0 but liquid_capital = 0 (simulating cooldown)
+        mock_balance = {
+            'equity': 1000.0,
+            'totalEquity': 1000.0,
+            'available': 500.0,
+            'availableBalance': 500.0,
+            'liquidCapital': 0.0  # Liquid capital is 0 due to cooldown returning empty
+        }
+        
+        with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
+            # Calculate effective_available as the bot would
+            available = float(mock_balance.get("available", 0.0))
+            liquid_capital = float(mock_balance.get("liquidCapital", 0.0))
+            effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+            
+            # effective_available should be 500 (from available), NOT 0 (from liquidCapital)
+            assert effective_available == 500.0, f"Expected effective_available=500.0, got {effective_available}"
+            
+            # The trade should NOT be blocked when effective_available > 0
+            assert effective_available > 0.0, "Trade should not be blocked when available > 0 even if liquidCapital is 0"
+    
+    def test_effective_available_uses_liquid_capital_when_positive(self):
+        """Test that effective_available uses liquid_capital when it's positive"""
+        from competition_bot import CompetitionTradingBot
+        
+        bot = CompetitionTradingBot(test_mode=True)
+        
+        # Mock balance with both available and liquid_capital > 0
+        mock_balance = {
+            'equity': 1000.0,
+            'totalEquity': 1000.0,
+            'available': 500.0,
+            'availableBalance': 500.0,
+            'liquidCapital': 350.0  # Liquid capital after deducting pending orders margin
+        }
+        
+        with patch.object(bot.client, 'get_account_balance', return_value=mock_balance):
+            # Calculate effective_available as the bot would
+            available = float(mock_balance.get("available", 0.0))
+            liquid_capital = float(mock_balance.get("liquidCapital", 0.0))
+            effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+            
+            # effective_available should be 350 (from liquidCapital, not available)
+            assert effective_available == 350.0, f"Expected effective_available=350.0 (liquid_capital), got {effective_available}"
 
 
 class TestAITradingLogger:

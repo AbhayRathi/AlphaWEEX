@@ -1693,6 +1693,17 @@ class CompetitionTradingBot:
                     logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
                     return
                 
+                # Effective Available Gating: Use liquid_capital if > 0, else available
+                # This prevents blocking trades solely because pending-orders route is cooling
+                balance = self.client.get_account_balance() or {}
+                available = float(balance.get("available", 0.0))
+                liquid_capital = float(balance.get("liquidCapital", 0.0))
+                effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+                
+                if effective_available <= 0.0:
+                    logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
+                    return
+                
                 # Enhancement 6: Check volume spike filter
                 if not self.is_volume_spike(klines, symbol):
                     logger.info(f"🚫 Skipping {symbol}: Low volume (potential liquidity trap)")
@@ -1844,6 +1855,17 @@ class CompetitionTradingBot:
                     new_position_pct = EQUITY_SIZING_PCT
                     if current_exposure + new_position_pct > GLOBAL_MAX_EXPOSURE_PCT:
                         logger.info(f"🛑 Skipping {symbol}: Max exposure reached ({current_exposure:.1f}% used, limit {GLOBAL_MAX_EXPOSURE_PCT}%)")
+                        return
+                    
+                    # Effective Available Gating: Use liquid_capital if > 0, else available
+                    # This prevents blocking trades solely because pending-orders route is cooling
+                    balance = self.client.get_account_balance() or {}
+                    available = float(balance.get("available", 0.0))
+                    liquid_capital = float(balance.get("liquidCapital", 0.0))
+                    effective_available = liquid_capital if (liquid_capital and liquid_capital > 0.0) else available
+                    
+                    if effective_available <= 0.0:
+                        logger.warning("⚠️ Skipping trade: no effective available funds (pending-orders cooling or empty balance).")
                         return
                     
                     # Check volume spike filter

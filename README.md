@@ -407,6 +407,9 @@ WEEX_DISABLE_LEVERAGE_INIT=true     # Skip leverage init to reduce 404 noise
 WEEX_PENDING_ORDERS_TTL=10          # Cache TTL for pending-orders (seconds)
 WEEX_DISABLE_LIQUID_CAPITAL=false   # Emergency kill-switch to bypass liquid capital calc
 
+# Available balance fallback
+WEEX_AVAILABLE_FALLBACK_HAIRCUT=1.0 # Multiply fallback "available" by this factor (e.g., 0.98 for extra caution)
+
 # Note: USE_CURL_CFFI is reserved for future TLS impersonation feature (not yet implemented)
 ```
 
